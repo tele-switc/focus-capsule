@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from PyQt6.QtCore import QRect, QSettings, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -25,6 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from focus_capsule.icon_utils import app_icon, clear_icon_cache
 from focus_capsule.models import FocusConfig
 
 
@@ -156,18 +159,18 @@ QSpinBox#compactSpin::down-button {
 }
 
 QPushButton#durationChip,
-QPushButton#appChip,
+QPushButton#appIconTile,
 QPushButton#selectedAppChip {
     min-height: 38px;
     background-color: #192532;
     color: #cbd5da;
     border: 1px solid #334250;
-    border-radius: 19px;
+    border-radius: 12px;
     padding: 0 15px;
 }
 
 QPushButton#durationChip:hover,
-QPushButton#appChip:hover,
+QPushButton#appIconTile:hover,
 QPushButton#selectedAppChip:hover {
     background-color: #21303d;
     border-color: #536574;
@@ -175,11 +178,43 @@ QPushButton#selectedAppChip:hover {
 }
 
 QPushButton#durationChip:checked,
-QPushButton#appChip:checked {
-    background-color: #67cfbb;
+QPushButton#appIconTile:checked {
+    background-color: #172821;
+    border: 2px solid #67cfbb;
+    color: #e8fffa;
+}
+
+QPushButton#appIconTile {
+    min-height: 0px;
+    border: 1px solid #2b3b50;
+    border-radius: 12px;
+    padding: 0;
+    background-color: #141d27;
+}
+
+QPushButton#appIconTile:hover {
     border-color: #67cfbb;
-    color: #081310;
-    font-weight: bold;
+    background-color: #172233;
+}
+
+QPushButton#appIconTile:checked {
+    border: 2px solid #67cfbb;
+    background-color: #17342F;
+}
+
+QWidget#appIconTilesScroll {
+    border: none;
+    background: transparent;
+}
+
+QLabel#appTileName {
+    color: #b0bcc8;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+QPushButton#appIconTile:checked QLabel#appTileName {
+    color: #a8efe1;
 }
 
 QPushButton#durationChip:focus,
@@ -325,6 +360,80 @@ class FlowLayout(QLayout):
             if item and item.widget():
                 item.widget().deleteLater()
 
+
+class IconGrid(QWidget):
+    """A responsive grid layout for app icon tiles (like "Open With")."""
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        columns: int = 6,
+        h_spacing: int = 12,
+        v_spacing: int = 12,
+    ):
+        super().__init__(parent)
+        self._columns = columns
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+        self._tiles: list[QWidget] = []
+        self.setMinimumHeight(0)
+
+    @property
+    def columns(self) -> int:
+        return self._columns
+
+    @columns.setter
+    def columns(self, value: int) -> None:
+        self._columns = max(4, value)
+        self._relayout()
+
+    def add_tile(self, widget: QWidget) -> None:
+        widget.setParent(self)
+        self._tiles.append(widget)
+        widget.show()
+        self.updateGeometry()
+        self._relayout()
+
+    def clear_tiles(self) -> None:
+        for w in self._tiles:
+            w.deleteLater()
+        self._tiles.clear()
+        self.updateGeometry()
+        self.update()
+
+    def _relayout(self) -> None:
+        if not self._tiles:
+            self.setMinimumHeight(0)
+            return
+
+        tile_w = self._tiles[0].sizeHint().width() if self._tiles[0].sizeHint().width() > 0 else 84
+        available = max(self.width(), tile_w * self._columns)
+        cols = max(1, min(self._columns, (available + self._h_spacing) // (tile_w + self._h_spacing)))
+
+        x = 0
+        y = 0
+        row_height = 0
+        for i, tile in enumerate(self._tiles):
+            if i > 0 and i % cols == 0:
+                x = 0
+                y += row_height + self._v_spacing
+                row_height = 0
+            tile.setGeometry(x, y, tile.sizeHint().width(), tile.sizeHint().height())
+            x += tile.sizeHint().width() + self._h_spacing
+            row_height = max(row_height, tile.sizeHint().height())
+
+        total_height = y + row_height
+        self.setMinimumHeight(total_height)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._relayout()
+
+    def sizeHint(self) -> QSize:
+        if not self._tiles:
+            return QSize(0, 0)
+        return QSize(self.width(), self.minimumHeight())
+
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
         margins = self.contentsMargins()
         effective = rect.adjusted(
@@ -351,27 +460,52 @@ class FlowLayout(QLayout):
 
 
 class AppChip(QPushButton):
-    """Checkable app choice with native keyboard and accessibility behaviour."""
+    """Icon tile with app icon + label, like Windows "Open With" picker."""
 
     toggled_app = pyqtSignal(str, bool)
 
-    def __init__(self, display_name: str, process_name: str, parent=None):
-        super().__init__(display_name, parent)
+    ICON_SIZE = 40
+    TILE_W = 84
+    TILE_H = 92
+
+    def __init__(self, display_name: str, process_name: str, custom_path: str = "", parent=None):
+        super().__init__(parent)
         self._display_name = display_name
         self._process_name = process_name
+        self._custom_path = custom_path
         self._selected = False
-        self.setObjectName("appChip")
+        self.setObjectName("appIconTile")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedSize(self.TILE_W, self.TILE_H)
         self.setAccessibleDescription(f"专注期间允许使用 {display_name}")
         self.toggled.connect(self._on_toggled)
         self._refresh_accessibility(False)
+        self._build_content()
+
+    def _build_content(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 8, 4, 4)
+        layout.setSpacing(4)
+
+        self._icon_label = QLabel()
+        self._icon_label.setFixedSize(self.ICON_SIZE, self.ICON_SIZE)
+        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon = app_icon(self._process_name, self._custom_path)
+        self._icon_label.setPixmap(icon.pixmap(QSize(self.ICON_SIZE, self.ICON_SIZE)))
+        layout.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignCenter)
+
+        self._name_label = QLabel(self._display_name)
+        self._name_label.setObjectName("appTileName")
+        self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name_label.setWordWrap(False)
+        self._name_label.setFixedWidth(self.TILE_W - 8)
+        self._name_label.setFixedHeight(20)
+        layout.addWidget(self._name_label)
 
     def _on_toggled(self, checked: bool) -> None:
         self._selected = checked
-        self.setText(f"✓ {self._display_name}" if checked else self._display_name)
         self._refresh_accessibility(checked)
         self.toggled_app.emit(self._process_name, checked)
 
@@ -381,6 +515,11 @@ class AppChip(QPushButton):
 
     def set_selected(self, selected: bool) -> None:
         self.setChecked(selected)
+
+    def update_icon(self) -> None:
+        """Re-extract icon (e.g. after a custom app is added)."""
+        icon = app_icon(self._process_name, self._custom_path)
+        self._icon_label.setPixmap(icon.pixmap(QSize(self.ICON_SIZE, self.ICON_SIZE)))
 
 
 class PresetButton(QPushButton):
@@ -578,17 +717,16 @@ class SettingsPanel(QWidget):
     def _build_apps_section(self) -> QFrame:
         section, layout = self._new_section(
             "专注时允许哪些应用？",
-            "勾选工作需要的应用。未勾选的应用会按保护强度提醒或拦截。",
+            "点选工作需要的应用，像打开方式那样选择。未选中的应用会按保护强度提醒或拦截。",
         )
 
-        chips_host = QWidget()
-        chips_flow = FlowLayout(chips_host, horizontal_spacing=8, vertical_spacing=8)
+        self._icon_grid = IconGrid(self, columns=6, h_spacing=10, v_spacing=10)
         for display_name, process_name in COMMON_APPS:
-            chip = AppChip(display_name, process_name, self)
+            chip = AppChip(display_name, process_name, "", self)
             chip.toggled_app.connect(self._on_chip_toggle)
-            chips_flow.addWidget(chip)
+            self._icon_grid.add_tile(chip)
             self._chip_widgets[process_name] = chip
-        layout.addWidget(chips_host)
+        layout.addWidget(self._icon_grid)
 
         add_custom_btn = QPushButton("＋ 选择其他应用")
         add_custom_btn.setObjectName("addAppButton")
@@ -740,7 +878,7 @@ class SettingsPanel(QWidget):
                 self,
                 "选择应用",
                 "",
-                "Windows 应用 (*.exe)",
+                "Windows 应用 (*.exe *.lnk)",
             )
         else:
             file_path, _ = QFileDialog.getOpenFileName(
@@ -763,6 +901,14 @@ class SettingsPanel(QWidget):
         if common_chip and not common_chip.isChecked():
             common_chip.setChecked(True)
             return
+
+        # Add a new icon tile for the custom app
+        if identifier not in self._chip_widgets:
+            new_chip = AppChip(display_name, identifier, file_path, self)
+            new_chip.toggled_app.connect(self._on_chip_toggle)
+            self._icon_grid.add_tile(new_chip)
+            self._chip_widgets[identifier] = new_chip
+            clear_icon_cache()
 
         if identifier not in self._whitelist:
             self._whitelist.append(identifier)
