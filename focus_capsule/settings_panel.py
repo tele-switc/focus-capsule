@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
-from PyQt6.QtCore import QRect, QSettings, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -353,6 +353,42 @@ class FlowLayout(QLayout):
         margins = self.contentsMargins()
         size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
         return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        """Lay out items in a flowing wrap within *rect*.
+
+        Returns the total height required.
+        """
+        margins = self.contentsMargins()
+        effective_rect = rect.adjusted(
+            margins.left(), margins.top(), -margins.right(), -margins.bottom()
+        )
+        x = effective_rect.x()
+        y = effective_rect.y()
+        line_height = 0
+
+        for item in self._items:
+            wid = item.widget()
+            if wid is not None and wid.isHidden():
+                continue
+
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self._horizontal_spacing
+
+            if next_x - self._horizontal_spacing > effective_rect.right() and line_height > 0:
+                x = effective_rect.x()
+                y = y + line_height + self._vertical_spacing
+                next_x = x + hint.width() + self._horizontal_spacing
+                line_height = 0
+
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+
+            x = next_x
+            line_height = max(line_height, hint.height())
+
+        total = y + line_height - rect.y() + margins.bottom()
+        return total
 
     def clear_widgets(self) -> None:
         while self.count():
