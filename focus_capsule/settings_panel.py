@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from focus_capsule.icon_utils import app_icon, clear_icon_cache
+from focus_capsule.icon_utils import app_icon, clear_icon_cache, discover_installed_apps
 from focus_capsule.models import FocusConfig
 
 
@@ -209,7 +209,7 @@ QWidget#appIconTilesScroll {
 
 QLabel#appTileName {
     color: #b0bcc8;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
 }
 
@@ -500,9 +500,9 @@ class AppChip(QPushButton):
 
     toggled_app = pyqtSignal(str, bool)
 
-    ICON_SIZE = 40
-    TILE_W = 84
-    TILE_H = 92
+    ICON_SIZE = 48
+    TILE_W = 104
+    TILE_H = 112
 
     def __init__(self, display_name: str, process_name: str, custom_path: str = "", parent=None):
         super().__init__(parent)
@@ -537,7 +537,7 @@ class AppChip(QPushButton):
         self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._name_label.setWordWrap(False)
         self._name_label.setFixedWidth(self.TILE_W - 8)
-        self._name_label.setFixedHeight(20)
+        self._name_label.setFixedHeight(22)
         layout.addWidget(self._name_label)
 
     def _on_toggled(self, checked: bool) -> None:
@@ -757,11 +757,38 @@ class SettingsPanel(QWidget):
         )
 
         self._icon_grid = IconGrid(self, columns=6, h_spacing=10, v_spacing=10)
+
+        # Add common preset apps first
         for display_name, process_name in COMMON_APPS:
             chip = AppChip(display_name, process_name, "", self)
             chip.toggled_app.connect(self._on_chip_toggle)
             self._icon_grid.add_tile(chip)
             self._chip_widgets[process_name] = chip
+
+        # Add discovered system apps
+        if os.name == "nt":
+            try:
+                system_apps = discover_installed_apps()
+                for app_info in system_apps:
+                    display = app_info["display_name"]
+                    process = app_info["process_name"]
+                    path = app_info.get("custom_path", "")
+                    # Skip duplicates and common system executables
+                    if process.lower() in {p.lower() for _, p in COMMON_APPS}:
+                        continue
+                    if process.lower() in self._chip_widgets:
+                        continue
+                    if process.lower().endswith((".dll", ".sys", ".drv", ".com")):
+                        continue
+                    if len(display) < 2:
+                        continue
+                    chip = AppChip(display, process, path, self)
+                    chip.toggled_app.connect(self._on_chip_toggle)
+                    self._icon_grid.add_tile(chip)
+                    self._chip_widgets[process] = chip
+            except Exception:
+                pass
+
         layout.addWidget(self._icon_grid)
 
         add_custom_btn = QPushButton("＋ 选择其他应用")
