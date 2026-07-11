@@ -1,0 +1,8 @@
+PyQt6==6.11.0
+PyQt6-Qt6==6.11.1
+PyQt6-sip==13.11.1
+psutil==7.2.2
+
+# Platform integrations used by the foreground-application monitor.
+pywin32==312; sys_platform == "win32"
+pyobjc-framework-Cocoa>=11.0,<13; sys_platform == "darwin"

@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "focus-capsule"
+version = "2.0.0"
+description = "专注舱 — 温柔而坚定的专注守护者，桌面专注力工具。"
+readme = "README.md"
+license = { text = "GPL-3.0-only" }
+requires-python = ">=3.10"
+authors = [{ name = "Focus Capsule Project" }]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "PyQt6==6.11.0",
+    "PyQt6-Qt6==6.11.1",
+    "PyQt6-sip==13.11.1",
+    "psutil==7.2.2",
+    "pywin32==312; sys_platform == 'win32'",
+    "pyobjc-framework-Cocoa>=11.0,<13; sys_platform == 'darwin'",
+]
+
+[project.urls]
+Homepage = "https://github.com/focus-capsule/focus-capsule"
+
+[project.scripts]
+focus-capsule = "focus_capsule.app:main"
+
+[tool.setuptools.packages.find]
+include = ["focus_capsule*"]
+exclude = ["tests*", "packaging*", "build*", "dist*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["build", "dist", ".ruff_cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

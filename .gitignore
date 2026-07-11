@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.focus_capsule_history.json
+
+# Local environments and tool caches
+.venv/
+.venv-*/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Generated native icons (the SVG source is tracked)
+assets/focus-capsule.ico
+assets/FocusCapsule.icns
+assets/FocusCapsule.iconset/
+
+# Local signing material must never be committed
+*.p12
+*.pfx
+*.cer
+*.keychain-db
+
+# Legacy/local build artifacts
+/Focus Capsule.exe
+*.dmg
+.DS_Store

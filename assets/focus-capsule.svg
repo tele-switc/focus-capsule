@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1B2428"/>
+      <stop offset="1" stop-color="#0C1114"/>
+    </linearGradient>
+    <linearGradient id="focus" x1="352" y1="224" x2="672" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#91D6A8"/>
+      <stop offset="1" stop-color="#4C8E65"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#000000" flood-opacity=".42"/>
+    </filter>
+  </defs>
+
+  <rect x="52" y="52" width="920" height="920" rx="218" fill="url(#background)"/>
+  <rect x="53" y="53" width="918" height="918" rx="217" fill="none" stroke="#FFFFFF" stroke-opacity=".08" stroke-width="2"/>
+
+  <g filter="url(#shadow)">
+    <rect x="316" y="172" width="392" height="680" rx="196" fill="#151D20" stroke="#FFFFFF" stroke-opacity=".12" stroke-width="10"/>
+    <path d="M316 512c0-108.248 87.752-196 196-196s196 87.752 196 196H316Z" fill="url(#focus)"/>
+    <path d="M708 512c0 108.248-87.752 196-196 196s-196-87.752-196-196h392Z" fill="#E8EEE9"/>
+    <circle cx="512" cy="512" r="58" fill="#11181B"/>
+    <circle cx="512" cy="512" r="24" fill="#91D6A8"/>
+  </g>
+</svg>
