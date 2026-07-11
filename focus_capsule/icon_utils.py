@@ -352,6 +352,10 @@ def app_pixmap(process_name: str, custom_path: str = "", size: int = DEFAULT_ICO
     return pm
 
 
-def clear_cache() -> None:
+def clear_icon_cache() -> None:
     """Clear the icon cache (e.g. when new apps are added)."""
     _ICON_CACHE.clear()
+
+
+# Backward-compatible alias
+clear_cache = clear_icon_cache
