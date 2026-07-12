@@ -2,8 +2,8 @@
 # Regenerate this file before every Windows build.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 0, 0, 0),
-    prodvers=(2, 0, 0, 0),
+    filevers=(2, 1, 0, 0),
+    prodvers=(2, 1, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
         [
           StringStruct(u'CompanyName', u'Focus Capsule Project'),
           StringStruct(u'FileDescription', u'Focus Capsule desktop application'),
-          StringStruct(u'FileVersion', u'2.0.0.0'),
+          StringStruct(u'FileVersion', u'2.1.0.0'),
           StringStruct(u'InternalName', u'FocusCapsule'),
           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Focus Capsule contributors'),
           StringStruct(u'OriginalFilename', u'Focus Capsule.exe'),
           StringStruct(u'ProductName', u'Focus Capsule'),
-          StringStruct(u'ProductVersion', u'2.0.0')
+          StringStruct(u'ProductVersion', u'2.1.0')
         ]
       )
     ]),
