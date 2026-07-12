@@ -36,6 +36,22 @@ function Resolve-BuildPython {
     return $venvPython
 }
 
+function Find-InnoCompiler {
+    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $candidates = @()
+    if (${env:ProgramFiles(x86)}) {
+        $candidates += Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates += Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+    }
+    return $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+
 $BuildPython = Resolve-BuildPython -RequestedPython $Python
 Write-Host "Building Focus Capsule $Version with $BuildPython"
 
