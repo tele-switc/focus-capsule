@@ -1,0 +1,81 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "android_toga/**"
+      - "focus_capsule/models.py"
+      - "focus_capsule/controller.py"
+      - ".github/workflows/build-android.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  JAVA_VERSION: "17"
+  ANDROID_SDK_VERSION: 35
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Install Android SDK
+        run: |
+          sdkmanager "platforms;android-${{ env.ANDROID_SDK_VERSION }}"
+          sdkmanager "build-tools;34.0.0"
+          sdkmanager "platform-tools"
+          sdkmanager "cmdline-tools;latest"
+
+      - name: Install Python build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r android_toga/requirements-toga.txt
+
+      - name: Run reliability tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Create Toga app structure
+        run: |
+          cd android_toga
+          briefcase new --no-tui
+          # Replace with our app structure
+          cp -r focus_capsule_android/* .
+
+      - name: Build Android APK
+        run: |
+          cd android_toga
+          briefcase build android
+          briefcase run android --device-emulator
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: focus-capsule-android-apk
+          path: |
+            android_toga/dist/*.apk
+          if-no-files-found: error
+          retention-days: 14

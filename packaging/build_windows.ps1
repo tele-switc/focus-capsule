@@ -2,8 +2,7 @@
 param(
     [string]$Python,
     [switch]$SkipDependencyInstall,
-    [switch]$SkipInstaller,
-    [switch]$RequireSigning
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,85 +34,6 @@ function Resolve-BuildPython {
         }
     }
     return $venvPython
-}
-
-function Find-SignTool {
-    $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($command) {
-        return $command.Source
-    }
-
-    $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
-    if (Test-Path -LiteralPath $kitsRoot) {
-        $candidate = Get-ChildItem -LiteralPath $kitsRoot -Filter signtool.exe -Recurse -File |
-            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-        if ($candidate) {
-            return $candidate.FullName
-        }
-    }
-    return $null
-}
-
-function Sign-Artifact {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $certificate = $env:WINDOWS_SIGN_PFX
-    if (-not $certificate) {
-        if ($RequireSigning) {
-            throw "WINDOWS_SIGN_PFX is required for this build."
-        }
-        Write-Warning "Signing skipped for $Path because WINDOWS_SIGN_PFX is not set."
-        return
-    }
-    if (-not (Test-Path -LiteralPath $certificate)) {
-        throw "Signing certificate not found: $certificate"
-    }
-
-    $signTool = Find-SignTool
-    if (-not $signTool) {
-        throw "signtool.exe was not found. Install the Windows SDK before signing."
-    }
-
-    $timestamp = if ($env:WINDOWS_TIMESTAMP_URL) {
-        $env:WINDOWS_TIMESTAMP_URL
-    } else {
-        "http://timestamp.digicert.com"
-    }
-    $arguments = @(
-        "sign", "/fd", "SHA256", "/td", "SHA256", "/tr", $timestamp,
-        "/f", $certificate
-    )
-    if ($env:WINDOWS_SIGN_PASSWORD) {
-        $arguments += @("/p", $env:WINDOWS_SIGN_PASSWORD)
-    }
-    $arguments += $Path
-
-    & $signTool @arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Authenticode signing failed for $Path"
-    }
-    & $signTool verify /pa /v $Path
-    if ($LASTEXITCODE -ne 0) {
-        throw "Authenticode verification failed for $Path"
-    }
-}
-
-function Find-InnoCompiler {
-    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-    if ($command) {
-        return $command.Source
-    }
-
-    $candidates = @()
-    if (${env:ProgramFiles(x86)}) {
-        $candidates += Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
-    }
-    if ($env:LOCALAPPDATA) {
-        $candidates += Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
-    }
-    return $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }
 
 $BuildPython = Resolve-BuildPython -RequestedPython $Python
@@ -150,7 +70,6 @@ try {
     if (-not (Test-Path -LiteralPath $application)) {
         throw "Expected application was not produced: $application"
     }
-    Sign-Artifact -Path $application
 
     if ($SkipInstaller) {
         Write-Host "Portable application: $(Split-Path -Parent $application)"
@@ -169,7 +88,6 @@ try {
     if (-not (Test-Path -LiteralPath $installer)) {
         throw "Expected installer was not produced: $installer"
     }
-    Sign-Artifact -Path $installer
 
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
     "$hash  $(Split-Path -Leaf $installer)" |

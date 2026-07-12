@@ -1,0 +1,15 @@
+# BeeWare/Toga + Android build dependencies for Focus Capsule
+# Install in a clean virtual environment before building
+
+# Core Toga packages
+toga>=0.5.0
+toga-android>=0.5.0
+
+# BeeWare briefcase (project scaffolding and packaging)
+briefcase>=0.3.20
+
+# Shared dependencies (also used by PyQt desktop version)
+psutil>=7.0.0
+
+# Android-specific
+android-sdk>=0.1.0

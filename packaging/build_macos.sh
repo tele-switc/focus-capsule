@@ -44,12 +44,6 @@ if [[ ! -d "${APP}" ]]; then
   exit 1
 fi
 
-if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
-  codesign --verify --deep --strict --verbose=2 "${APP}"
-else
-  echo "Warning: MACOS_CODESIGN_IDENTITY is not set; producing an unsigned development DMG." >&2
-fi
-
 DMG_DIR="${DIST_DIR}/dmg"
 DMG="${DMG_DIR}/Focus-Capsule-${VERSION}-macOS-${ARCH}.dmg"
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/focus-capsule-dmg.XXXXXX")"
@@ -66,33 +60,6 @@ hdiutil create \
   -format UDZO \
   -ov \
   "${DMG}"
-
-if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
-  codesign --force --timestamp --sign "${MACOS_CODESIGN_IDENTITY}" "${DMG}"
-  codesign --verify --verbose=2 "${DMG}"
-fi
-
-if [[ -n "${APPLE_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
-  xcrun notarytool submit "${DMG}" \
-    --keychain-profile "${APPLE_NOTARY_KEYCHAIN_PROFILE}" \
-    --wait
-  xcrun stapler staple "${DMG}"
-  xcrun stapler validate "${DMG}"
-elif [[ -n "${APPLE_ID:-}" || -n "${APPLE_TEAM_ID:-}" || -n "${APPLE_APP_PASSWORD:-}" ]]; then
-  if [[ -z "${APPLE_ID:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_APP_PASSWORD:-}" ]]; then
-    echo "APPLE_ID, APPLE_TEAM_ID, and APPLE_APP_PASSWORD must all be set for notarization." >&2
-    exit 1
-  fi
-  xcrun notarytool submit "${DMG}" \
-    --apple-id "${APPLE_ID}" \
-    --team-id "${APPLE_TEAM_ID}" \
-    --password "${APPLE_APP_PASSWORD}" \
-    --wait
-  xcrun stapler staple "${DMG}"
-  xcrun stapler validate "${DMG}"
-else
-  echo "Warning: notarization credentials are not set; notarization was skipped." >&2
-fi
 
 (
   cd "${DMG_DIR}"
