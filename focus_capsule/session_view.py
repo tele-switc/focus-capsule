@@ -37,6 +37,7 @@ class SessionViewWindow(QWidget):
         super().__init__(parent)
         self._config = config
         self._allow_close = False
+        self._is_hidden_to_tray = False
         self.setObjectName("appWindow")
         self.setWindowTitle("专注进行中 · 专注舱")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
@@ -227,6 +228,15 @@ class SessionViewWindow(QWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def hide(self, to_tray: bool = False):
+        self._is_hidden_to_tray = to_tray
+        super().hide()
+
+    def show_normal(self):
+        if not self.isVisible():
+            self._is_hidden_to_tray = False
+            self.showNormal()
 
     def closeEvent(self, event: QCloseEvent):
         if self._allow_close:

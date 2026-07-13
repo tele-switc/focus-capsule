@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
 
-from PyQt6.QtCore import QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -19,6 +20,7 @@ from PyQt6.QtWidgets import (
     QLayout,
     QLayoutItem,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -27,7 +29,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from focus_capsule.icon_utils import app_icon, clear_icon_cache, discover_installed_apps
+from focus_capsule.icon_utils import (
+    app_pixmap,
+    discover_installed_apps,
+    resolve_windows_app_target,
+    windows_shortcut_details,
+)
 from focus_capsule.models import FocusConfig
 
 
@@ -58,7 +65,7 @@ def _common_apps_for_platform() -> list[tuple[str, str]]:
             ("Excel", "excel.exe"),
             ("Outlook", "outlook.exe"),
             ("Slack", "slack.exe"),
-            ("终端", "wt.exe"),
+            ("终端", "windowsterminal.exe"),
             ("记事本", "notepad.exe"),
             ("PyCharm", "pycharm64.exe"),
             ("IntelliJ", "idea64.exe"),
@@ -74,6 +81,8 @@ def _common_apps_for_platform() -> list[tuple[str, str]]:
 
 
 COMMON_APPS = _common_apps_for_platform()
+MIN_FOCUS_MINUTES = 1
+MAX_FOCUS_MINUTES = (2**31 - 1) // 60
 
 
 PANEL_STYLESHEET = """
@@ -185,7 +194,11 @@ QPushButton#appIconTile:checked {
 }
 
 QPushButton#appIconTile {
-    min-height: 0px;
+    /* QSS width/height describe the content box; borders add 2 px. */
+    min-width: 94px;
+    max-width: 94px;
+    min-height: 104px;
+    max-height: 104px;
     border: 1px solid #2b3b50;
     border-radius: 12px;
     padding: 0;
@@ -213,12 +226,25 @@ QLabel#appTileName {
     font-weight: 500;
 }
 
+QLabel#appTileCheck {
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 20px;
+    max-height: 20px;
+    color: #071510;
+    background-color: #67cfbb;
+    border: 2px solid #17342f;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
 QPushButton#appIconTile:checked QLabel#appTileName {
     color: #a8efe1;
 }
 
 QPushButton#durationChip:focus,
-QPushButton#appChip:focus,
+QPushButton#appIconTile:focus,
 QPushButton#selectedAppChip:focus,
 QPushButton#addAppButton:focus,
 QPushButton#intensityChoice:focus {
@@ -299,7 +325,7 @@ class FlowLayout(QLayout):
 
     def __init__(
         self,
-        parent: Optional[QWidget] = None,
+        parent: QWidget | None = None,
         margin: int = 0,
         horizontal_spacing: int = 8,
         vertical_spacing: int = 8,
@@ -320,12 +346,12 @@ class FlowLayout(QLayout):
     def count(self) -> int:
         return len(self._items)
 
-    def itemAt(self, index: int) -> Optional[QLayoutItem]:
+    def itemAt(self, index: int) -> QLayoutItem | None:
         if 0 <= index < len(self._items):
             return self._items[index]
         return None
 
-    def takeAt(self, index: int) -> Optional[QLayoutItem]:
+    def takeAt(self, index: int) -> QLayoutItem | None:
         if 0 <= index < len(self._items):
             return self._items.pop(index)
         return None
@@ -402,17 +428,25 @@ class IconGrid(QWidget):
 
     def __init__(
         self,
-        parent: Optional[QWidget] = None,
+        parent: QWidget | None = None,
         columns: int = 6,
-        h_spacing: int = 12,
-        v_spacing: int = 12,
+        h_spacing: int = 8,
+        v_spacing: int = 10,
     ):
         super().__init__(parent)
         self._columns = columns
         self._h_spacing = h_spacing
         self._v_spacing = v_spacing
         self._tiles: list[QWidget] = []
-        self.setMinimumHeight(0)
+        self._effective_columns = 1
+        self._layout = QGridLayout(self)
+        self._layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setHorizontalSpacing(self._h_spacing)
+        self._layout.setVerticalSpacing(self._v_spacing)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+        self.setFixedHeight(0)
 
     @property
     def columns(self) -> int:
@@ -424,42 +458,55 @@ class IconGrid(QWidget):
         self._relayout()
 
     def add_tile(self, widget: QWidget) -> None:
-        widget.setParent(self)
         self._tiles.append(widget)
+        widget.setParent(self)
         widget.show()
-        self.updateGeometry()
         self._relayout()
 
     def clear_tiles(self) -> None:
+        while self._layout.count():
+            self._layout.takeAt(0)
         for w in self._tiles:
             w.deleteLater()
         self._tiles.clear()
+        self.setFixedHeight(0)
         self.updateGeometry()
         self.update()
 
     def _relayout(self) -> None:
-        if not self._tiles:
-            self.setMinimumHeight(0)
+        while self._layout.count():
+            self._layout.takeAt(0)
+
+        visible_tiles = [tile for tile in self._tiles if not tile.isHidden()]
+        if not visible_tiles:
+            self._effective_columns = 1
+            self.setFixedHeight(0)
+            self.updateGeometry()
             return
 
-        tile_w = self._tiles[0].sizeHint().width() if self._tiles[0].sizeHint().width() > 0 else 84
-        available = max(self.width(), tile_w * self._columns)
-        cols = max(1, min(self._columns, (available + self._h_spacing) // (tile_w + self._h_spacing)))
+        tile_w = AppChip.TILE_W
+        tile_h = AppChip.TILE_H
+        available = max(tile_w, self.contentsRect().width())
+        cols_that_fit = max(1, (available + self._h_spacing) // (tile_w + self._h_spacing))
+        cols = max(1, min(self._columns, cols_that_fit))
+        self._effective_columns = cols
 
-        x = 0
-        y = 0
-        row_height = 0
-        for i, tile in enumerate(self._tiles):
-            if i > 0 and i % cols == 0:
-                x = 0
-                y += row_height + self._v_spacing
-                row_height = 0
-            tile.setGeometry(x, y, tile.sizeHint().width(), tile.sizeHint().height())
-            x += tile.sizeHint().width() + self._h_spacing
-            row_height = max(row_height, tile.sizeHint().height())
+        for index, tile in enumerate(visible_tiles):
+            row, column = divmod(index, cols)
+            self._layout.addWidget(tile, row, column, Qt.AlignmentFlag.AlignLeft)
 
-        total_height = y + row_height
-        self.setMinimumHeight(total_height)
+        for column in range(cols):
+            self._layout.setColumnStretch(column, 0)
+        self._layout.setColumnStretch(cols, 1)
+
+        rows = (len(visible_tiles) + cols - 1) // cols
+        total_height = rows * tile_h + max(0, rows - 1) * self._v_spacing
+        self.setFixedHeight(total_height)
+        self.updateGeometry()
+
+    def refresh(self) -> None:
+        """Reflow after tiles have been shown or hidden."""
+        self._relayout()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -468,31 +515,11 @@ class IconGrid(QWidget):
     def sizeHint(self) -> QSize:
         if not self._tiles:
             return QSize(0, 0)
-        return QSize(self.width(), self.minimumHeight())
-
-    def _do_layout(self, rect: QRect, test_only: bool) -> int:
-        margins = self.contentsMargins()
-        effective = rect.adjusted(
-            margins.left(), margins.top(), -margins.right(), -margins.bottom()
+        preferred_width = (
+            self._columns * AppChip.TILE_W
+            + max(0, self._columns - 1) * self._h_spacing
         )
-        x = effective.x()
-        y = effective.y()
-        line_height = 0
-
-        for item in self._items:
-            hint = item.sizeHint()
-            next_x = x + hint.width() + self._horizontal_spacing
-            if line_height and next_x - self._horizontal_spacing > effective.right() + 1:
-                x = effective.x()
-                y += line_height + self._vertical_spacing
-                next_x = x + hint.width() + self._horizontal_spacing
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(x, y, hint.width(), hint.height()))
-            x = next_x
-            line_height = max(line_height, hint.height())
-
-        return y + line_height - rect.y() + margins.bottom()
+        return QSize(preferred_width, self.height())
 
 
 class AppChip(QPushButton):
@@ -500,48 +527,96 @@ class AppChip(QPushButton):
 
     toggled_app = pyqtSignal(str, bool)
 
-    ICON_SIZE = 48
-    TILE_W = 104
-    TILE_H = 112
+    ICON_SIZE = 44
+    TILE_W = 96
+    TILE_H = 106
 
-    def __init__(self, display_name: str, process_name: str, custom_path: str = "", parent=None):
+    def __init__(
+        self,
+        display_name: str,
+        process_name: str,
+        custom_path: str = "",
+        parent=None,
+        *,
+        icon_source: str = "",
+        icon_index: int = 0,
+    ):
         super().__init__(parent)
         self._display_name = display_name
         self._process_name = process_name
         self._custom_path = custom_path
+        self._icon_source = icon_source
+        self._icon_index = int(icon_index)
         self._selected = False
         self.setObjectName("appIconTile")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setFixedSize(self.TILE_W, self.TILE_H)
+        self.setMinimumSize(self.TILE_W, self.TILE_H)
+        self.setMaximumSize(self.TILE_W, self.TILE_H)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setAccessibleDescription(f"专注期间允许使用 {display_name}")
         self.toggled.connect(self._on_toggled)
         self._refresh_accessibility(False)
         self._build_content()
 
+    def sizeHint(self) -> QSize:
+        return QSize(self.TILE_W, self.TILE_H)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.TILE_W, self.TILE_H)
+
+    @property
+    def display_name(self) -> str:
+        return self._display_name
+
+    @property
+    def process_name(self) -> str:
+        return self._process_name
+
+    @property
+    def custom_path(self) -> str:
+        return self._custom_path
+
     def _build_content(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 8, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(5, 9, 5, 7)
+        layout.setSpacing(6)
 
         self._icon_label = QLabel()
         self._icon_label.setFixedSize(self.ICON_SIZE, self.ICON_SIZE)
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon = app_icon(self._process_name, self._custom_path)
-        self._icon_label.setPixmap(icon.pixmap(QSize(self.ICON_SIZE, self.ICON_SIZE)))
+        self._icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.update_icon()
         layout.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignCenter)
 
-        self._name_label = QLabel(self._display_name)
+        metrics = QFontMetrics(self.font())
+        visible_name = metrics.elidedText(
+            self._display_name,
+            Qt.TextElideMode.ElideRight,
+            self.TILE_W - 14,
+        )
+        self._name_label = QLabel(visible_name)
         self._name_label.setObjectName("appTileName")
         self._name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._name_label.setWordWrap(False)
-        self._name_label.setFixedWidth(self.TILE_W - 8)
-        self._name_label.setFixedHeight(22)
+        self._name_label.setFixedWidth(self.TILE_W - 10)
+        self._name_label.setFixedHeight(20)
+        self._name_label.setToolTip(self._display_name)
+        self._name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self._name_label)
+
+        self._check_label = QLabel("✓", self)
+        self._check_label.setObjectName("appTileCheck")
+        self._check_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._check_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._check_label.move(self.TILE_W - 27, 7)
+        self._check_label.hide()
+        self._check_label.raise_()
 
     def _on_toggled(self, checked: bool) -> None:
         self._selected = checked
+        self._check_label.setVisible(checked)
         self._refresh_accessibility(checked)
         self.toggled_app.emit(self._process_name, checked)
 
@@ -554,8 +629,304 @@ class AppChip(QPushButton):
 
     def update_icon(self) -> None:
         """Re-extract icon (e.g. after a custom app is added)."""
-        icon = app_icon(self._process_name, self._custom_path)
-        self._icon_label.setPixmap(icon.pixmap(QSize(self.ICON_SIZE, self.ICON_SIZE)))
+        self._icon_label.setPixmap(
+            app_pixmap(
+                self._process_name,
+                self._custom_path,
+                self.ICON_SIZE,
+                icon_source=self._icon_source,
+                icon_index=self._icon_index,
+                device_pixel_ratio=float(self.devicePixelRatioF()),
+            )
+        )
+
+
+class InstalledAppPickerDialog(QDialog):
+    """Searchable icon catalog for installed apps not shown in the main grid."""
+
+    def __init__(self, apps: list[dict], selected: Iterable[str], parent=None):
+        super().__init__(parent)
+        self._apps = list(apps)
+        self._selected = {str(process).casefold() for process in selected}
+        self._chosen: dict[str, dict] = {}
+        self._tiles: list[AppChip] = []
+        self.setObjectName("appPickerDialog")
+        self.setWindowTitle("选择其他已安装应用")
+        self.setModal(True)
+        self.setMinimumSize(680, 520)
+        self.resize(760, 620)
+        self.setStyleSheet(PANEL_STYLESHEET)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(14)
+
+        title = QLabel("选择其他已安装应用")
+        title.setObjectName("settingsTitle")
+        root.addWidget(title)
+        subtitle = QLabel("这里只显示在这台电脑上检测到、且未放在常用区的软件。")
+        subtitle.setObjectName("settingsSubtitle")
+        subtitle.setWordWrap(True)
+        root.addWidget(subtitle)
+
+        self._search = QLineEdit()
+        self._search.setObjectName("goalInput")
+        self._search.setPlaceholderText("搜索应用名称、进程或路径")
+        self._search.setClearButtonEnabled(True)
+        self._search.setAccessibleName("搜索其他已安装应用")
+        self._search.textChanged.connect(self._filter_tiles)
+        self._search.installEventFilter(self)
+        root.addWidget(self._search)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("appPickerScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 4, 4, 4)
+        container_layout.setSpacing(0)
+        container_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        self._grid = IconGrid(container, columns=6, h_spacing=10, v_spacing=12)
+        container_layout.addWidget(self._grid)
+        scroll.setWidget(container)
+        root.addWidget(scroll, 1)
+
+        for info in self._apps:
+            self._add_app_tile(info, str(info.get("process_name", "")).casefold() in self._selected)
+
+        self._empty = QLabel("没有检测到更多应用。你仍可手动选择本机应用程序。")
+        self._empty.setObjectName("selectedEmpty")
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setMinimumHeight(72)
+        self._empty.setVisible(not self._tiles)
+        root.addWidget(self._empty)
+
+        footer = QHBoxLayout()
+        self._count_label = QLabel()
+        self._count_label.setObjectName("selectedSummary")
+        footer.addWidget(self._count_label)
+        self._browse_button = QPushButton("未找到？手动选择应用…")
+        self._browse_button.setObjectName("ghostButton")
+        self._browse_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._browse_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._browse_button.setAccessibleName("从这台电脑手动选择应用程序")
+        self._browse_button.clicked.connect(self._browse_apps)
+        footer.addWidget(self._browse_button)
+        footer.addStretch()
+        cancel = QPushButton("取消")
+        cancel.setObjectName("ghostButton")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+        self._add_button = QPushButton("添加所选")
+        self._add_button.setObjectName("primaryButton")
+        self._add_button.setAccessibleName("添加所选应用")
+        self._add_button.setEnabled(bool(self._selected))
+        self._add_button.clicked.connect(self.accept)
+        footer.addWidget(self._add_button)
+        root.addLayout(footer)
+        self._update_count()
+        self._search.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _add_app_tile(self, info: dict, selected: bool) -> AppChip | None:
+        display = str(info.get("display_name", "")).strip()
+        process = str(info.get("process_name", "")).strip().casefold()
+        path = str(info.get("custom_path", "")).strip()
+        icon_source = str(info.get("icon_source", "")).strip()
+        icon_index = int(info.get("icon_index", 0) or 0)
+        if not display or not process:
+            return None
+
+        existing = next(
+            (tile for tile in self._tiles if tile.process_name.casefold() == process),
+            None,
+        )
+        if existing:
+            if selected and not existing.isChecked():
+                existing.setChecked(True)
+            return existing
+
+        normalized_info = {
+            "display_name": display,
+            "process_name": process,
+            "custom_path": path,
+        }
+        if icon_source:
+            normalized_info["icon_source"] = icon_source
+            normalized_info["icon_index"] = icon_index
+        app_user_model_id = str(info.get("app_user_model_id", "")).strip()
+        if app_user_model_id:
+            normalized_info["app_user_model_id"] = app_user_model_id
+        tile = AppChip(
+            display,
+            process,
+            path,
+            self._grid,
+            icon_source=icon_source,
+            icon_index=icon_index,
+        )
+        tile.blockSignals(True)
+        tile.set_selected(selected)
+        tile.blockSignals(False)
+        if selected:
+            self._selected.add(process)
+            self._chosen[process] = dict(normalized_info)
+        tile.toggled_app.connect(
+            lambda emitted_process, checked, app_info=normalized_info: self._on_tile_toggled(
+                emitted_process,
+                checked,
+                app_info,
+            )
+        )
+        tile.installEventFilter(self)
+        self._tiles.append(tile)
+        self._grid.add_tile(tile)
+        return tile
+
+    def _browse_apps(self) -> None:
+        if os.name == "nt":
+            selected_paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "手动选择应用程序",
+                "",
+                "Windows 应用 (*.exe *.lnk)",
+            )
+        elif sys.platform == "darwin":
+            selected_paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "手动选择应用程序",
+                "/Applications",
+                "macOS 应用 (*.app)",
+            )
+        else:
+            selected_paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "手动选择应用程序",
+                "",
+                "可执行文件 (*)",
+            )
+        if not selected_paths:
+            return
+
+        invalid_names: list[str] = []
+        last_tile: AppChip | None = None
+        self._search.clear()
+        for selected_path in selected_paths:
+            validated_path = SettingsPanel._validated_app_path(selected_path)
+            if not validated_path:
+                invalid_names.append(Path(selected_path).name)
+                continue
+            process, default_display = SettingsPanel._custom_app_identity(validated_path)
+            source_path = Path(selected_path)
+            display = (
+                source_path.stem
+                if source_path.suffix.casefold() == ".lnk"
+                else default_display
+            )
+            info = {
+                "display_name": display,
+                "process_name": process.casefold(),
+                "custom_path": validated_path,
+            }
+            if os.name == "nt" and source_path.suffix.casefold() == ".lnk":
+                _target, icon_source, icon_index = windows_shortcut_details(selected_path)
+                if icon_source:
+                    info["icon_source"] = icon_source
+                    info["icon_index"] = icon_index
+            last_tile = self._add_app_tile(info, selected=True)
+
+        self._grid.refresh()
+        self._empty.setVisible(not self._tiles)
+        self._update_count()
+        if last_tile:
+            last_tile.show()
+            last_tile.setFocus(Qt.FocusReason.OtherFocusReason)
+        if invalid_names:
+            QMessageBox.warning(
+                self,
+                "无法添加应用",
+                "请选择仍然存在且可以运行的应用程序。\n\n"
+                + "未添加："
+                + "、".join(invalid_names),
+            )
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() != QEvent.Type.KeyPress:
+            return super().eventFilter(watched, event)
+
+        visible_tiles = [tile for tile in self._tiles if not tile.isHidden()]
+        key = event.key()
+        if watched is self._search and key == Qt.Key.Key_Down and visible_tiles:
+            visible_tiles[0].setFocus(Qt.FocusReason.TabFocusReason)
+            return True
+        if watched not in visible_tiles:
+            return super().eventFilter(watched, event)
+
+        index = visible_tiles.index(watched)
+        columns = max(1, self._grid._effective_columns)
+        offsets = {
+            Qt.Key.Key_Left: -1,
+            Qt.Key.Key_Right: 1,
+            Qt.Key.Key_Up: -columns,
+            Qt.Key.Key_Down: columns,
+        }
+        offset = offsets.get(key)
+        if offset is None:
+            return super().eventFilter(watched, event)
+        target = index + offset
+        if 0 <= target < len(visible_tiles):
+            visible_tiles[target].setFocus(Qt.FocusReason.OtherFocusReason)
+        return True
+
+    def _on_tile_toggled(
+        self,
+        process_name: str,
+        checked: bool,
+        app_info: dict,
+    ) -> None:
+        normalized = process_name.casefold()
+        if checked:
+            self._selected.add(normalized)
+            self._chosen[normalized] = dict(app_info)
+        else:
+            self._selected.discard(normalized)
+            self._chosen.pop(normalized, None)
+        self._update_count()
+
+    def _filter_tiles(self, query: str) -> None:
+        needle = query.strip().casefold()
+        visible = 0
+        for tile in self._tiles:
+            haystack = " ".join(
+                (tile.display_name, tile.process_name, tile.custom_path)
+            ).casefold()
+            matched = not needle or needle in haystack
+            tile.setVisible(matched)
+            visible += int(matched)
+        self._grid.refresh()
+        if needle:
+            self._empty.setText(
+                f"没有匹配“{query.strip()}”的已安装应用。"
+                "你仍可手动选择。"
+            )
+        else:
+            self._empty.setText("没有检测到更多应用。你仍可手动选择本机应用程序。")
+        self._empty.setVisible(visible == 0)
+        self._update_count(visible)
+
+    def _update_count(self, visible: int | None = None) -> None:
+        shown = len(self._tiles) if visible is None else visible
+        self._count_label.setText(
+            f"显示 {shown} 个 · 已选择 {len(self._chosen)} 个"
+        )
+        self._add_button.setEnabled(bool(self._chosen))
+
+    def selected_apps(self) -> list[dict]:
+        return list(self._chosen.values())
 
 
 class PresetButton(QPushButton):
@@ -636,8 +1007,12 @@ class SettingsPanel(QWidget):
         self._preset_by_minutes: dict[int, PresetButton] = {}
         self._intensity_cards: dict[str, IntensityCard] = {}
         self._chip_widgets: dict[str, AppChip] = {}
+        self._installed_apps: list[dict] = []
+        self._installed_by_process: dict[str, dict] = {}
+        self._pinned_processes: set[str] = set()
         self._app_display_names = {process: name for name, process in COMMON_APPS}
         self._selected_apps_labels: list[QPushButton] = []
+        self._load_installed_catalog()
         self._setup_ui()
         self.load_config()
         self._updating = False
@@ -700,6 +1075,117 @@ class SettingsPanel(QWidget):
 
         return section, section_layout
 
+    def _load_installed_catalog(self) -> None:
+        """Load a normalized catalog containing only apps present on this device."""
+        try:
+            discovered = discover_installed_apps()
+        except Exception:
+            discovered = []
+
+        installed: list[dict] = []
+        by_process: dict[str, dict] = {}
+        for raw in discovered:
+            display = str(raw.get("display_name", "")).strip()
+            process = str(raw.get("process_name", "")).strip().casefold()
+            path = str(raw.get("custom_path", "")).strip()
+            if not display or not process or not path:
+                continue
+            path_obj = Path(path)
+            exists = path_obj.is_dir() if sys.platform == "darwin" else path_obj.is_file()
+            if not exists:
+                continue
+            if os.name == "nt" and path_obj.suffix.casefold() != ".exe":
+                continue
+            if sys.platform == "darwin" and path_obj.suffix.casefold() != ".app":
+                continue
+            if process in by_process:
+                continue
+            info = {
+                "display_name": display,
+                "process_name": process,
+                "custom_path": str(path_obj),
+            }
+            icon_source = str(raw.get("icon_source", "")).strip()
+            if icon_source and Path(icon_source).is_file():
+                info["icon_source"] = icon_source
+                info["icon_index"] = int(raw.get("icon_index", 0) or 0)
+            app_user_model_id = str(raw.get("app_user_model_id", "")).strip()
+            if app_user_model_id:
+                info["app_user_model_id"] = app_user_model_id
+            installed.append(info)
+            by_process[process] = info
+
+        self._installed_apps = installed
+        self._installed_by_process = by_process
+        for process, info in by_process.items():
+            self._app_display_names[process] = str(info["display_name"])
+
+    def _primary_installed_apps(self) -> list[dict]:
+        """Return only installed common apps; user-pinned extras are added later."""
+        primary: list[dict] = []
+        for friendly_name, process_name in COMMON_APPS:
+            normalized = process_name.casefold()
+            info = self._installed_by_process.get(normalized)
+            if not info:
+                continue
+            item = dict(info)
+            item["display_name"] = friendly_name
+            primary.append(item)
+        return primary
+
+    def _add_primary_tile(self, info: dict, selected: bool = False) -> AppChip:
+        process = str(info.get("process_name", "")).strip().casefold()
+        existing = self._chip_widgets.get(process)
+        if existing:
+            if selected and not existing.isChecked():
+                existing.blockSignals(True)
+                existing.set_selected(True)
+                existing.blockSignals(False)
+            return existing
+
+        display = str(info.get("display_name", process)).strip() or process
+        path = str(info.get("custom_path", "")).strip()
+        tile = AppChip(
+            display,
+            process,
+            path,
+            self,
+            icon_source=str(info.get("icon_source", "")).strip(),
+            icon_index=int(info.get("icon_index", 0) or 0),
+        )
+        tile.toggled_app.connect(self._on_chip_toggle)
+        tile.blockSignals(True)
+        tile.set_selected(selected)
+        tile.blockSignals(False)
+        self._icon_grid.add_tile(tile)
+        self._chip_widgets[process] = tile
+        self._app_display_names[process] = display
+        return tile
+
+    def _remaining_installed_apps(self) -> list[dict]:
+        visible = {process.casefold() for process in self._chip_widgets}
+        return [
+            dict(info)
+            for info in self._installed_apps
+            if str(info.get("process_name", "")).casefold() not in visible
+        ]
+
+    def _refresh_other_apps_button(self) -> None:
+        if not hasattr(self, "_other_apps_button"):
+            return
+        remaining = len(self._remaining_installed_apps())
+        self._other_apps_button.setText(
+            f"＋ 选择其他应用（{remaining}）"
+            if remaining
+            else "＋ 手动选择应用…"
+        )
+        self._other_apps_button.setEnabled(True)
+        self._other_apps_button.setToolTip(
+            "打开本机其余已安装软件的图标列表，也可手动选择程序"
+            if remaining
+            else "手动选择这台电脑上实际存在的应用程序"
+        )
+
     def _build_goal_section(self) -> QFrame:
         section, layout = self._new_section(
             "这次要完成什么？", "可选。写下一个清晰结果，专注时更容易回到正轨。"
@@ -716,7 +1202,10 @@ class SettingsPanel(QWidget):
         return section
 
     def _build_duration_section(self) -> QFrame:
-        section, layout = self._new_section("专注多久？", "选择常用时长，或输入自定义分钟数。")
+        section, layout = self._new_section(
+            "专注多久？",
+            "选择常用时长，或直接输入任意正整数分钟。",
+        )
 
         preset_host = QWidget()
         preset_flow = FlowLayout(preset_host, horizontal_spacing=8, vertical_spacing=8)
@@ -731,19 +1220,21 @@ class SettingsPanel(QWidget):
 
         custom_row = QHBoxLayout()
         custom_row.setSpacing(10)
-        custom_label = QLabel("自定义")
+        custom_label = QLabel("自定义分钟")
         custom_label.setObjectName("fieldHint")
         custom_row.addWidget(custom_label)
 
         self._custom_min_spin = QSpinBox()
         self._custom_min_spin.setObjectName("durationSpin")
-        self._custom_min_spin.setRange(5, 240)
-        self._custom_min_spin.setSingleStep(5)
+        self._custom_min_spin.setRange(MIN_FOCUS_MINUTES, MAX_FOCUS_MINUTES)
+        self._custom_min_spin.setSingleStep(1)
+        self._custom_min_spin.setAccelerated(True)
+        self._custom_min_spin.setKeyboardTracking(False)
         self._custom_min_spin.setValue(25)
         self._custom_min_spin.setSuffix(" 分钟")
-        self._custom_min_spin.setMinimumWidth(112)
+        self._custom_min_spin.setMinimumWidth(160)
         self._custom_min_spin.setAccessibleName("自定义专注时长")
-        self._custom_min_spin.setAccessibleDescription("5 到 240 分钟")
+        self._custom_min_spin.setAccessibleDescription("输入任意正整数分钟")
         self._custom_min_spin.valueChanged.connect(self._on_duration_changed)
         custom_row.addWidget(self._custom_min_spin)
         custom_row.addStretch()
@@ -753,57 +1244,33 @@ class SettingsPanel(QWidget):
     def _build_apps_section(self) -> QFrame:
         section, layout = self._new_section(
             "专注时允许哪些应用？",
-            "点选工作需要的应用，像打开方式那样选择。未选中的应用会按保护强度提醒或拦截。",
+            "这里只显示这台电脑上已安装的软件。点选工作需要的应用，未选中的应用会按保护强度提醒或拦截。",
         )
 
-        self._icon_grid = IconGrid(self, columns=6, h_spacing=10, v_spacing=10)
+        self._icon_grid = IconGrid(self, columns=6, h_spacing=8, v_spacing=10)
 
-        # Add common preset apps first
-        for display_name, process_name in COMMON_APPS:
-            chip = AppChip(display_name, process_name, "", self)
-            chip.toggled_app.connect(self._on_chip_toggle)
-            self._icon_grid.add_tile(chip)
-            self._chip_widgets[process_name] = chip
-
-        # Add discovered system apps
-        if os.name == "nt":
-            try:
-                system_apps = discover_installed_apps()
-                for app_info in system_apps:
-                    display = app_info["display_name"]
-                    process = app_info["process_name"]
-                    path = app_info.get("custom_path", "")
-                    # Skip duplicates and common system executables
-                    if process.lower() in {p.lower() for _, p in COMMON_APPS}:
-                        continue
-                    if process.lower() in self._chip_widgets:
-                        continue
-                    if process.lower().endswith((".dll", ".sys", ".drv", ".com")):
-                        continue
-                    if len(display) < 2:
-                        continue
-                    chip = AppChip(display, process, path, self)
-                    chip.toggled_app.connect(self._on_chip_toggle)
-                    self._icon_grid.add_tile(chip)
-                    self._chip_widgets[process] = chip
-            except Exception:
-                pass
+        for app_info in self._primary_installed_apps():
+            self._add_primary_tile(app_info)
 
         layout.addWidget(self._icon_grid)
 
-        add_custom_btn = QPushButton("＋ 选择其他应用")
-        add_custom_btn.setObjectName("addAppButton")
-        add_custom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        add_custom_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        add_custom_btn.setAccessibleName("选择其他应用")
-        if sys.platform == "darwin":
-            add_custom_btn.setAccessibleDescription("从应用程序中选择一个 app 应用")
-        elif os.name == "nt":
-            add_custom_btn.setAccessibleDescription("选择一个 exe 应用程序")
-        else:
-            add_custom_btn.setAccessibleDescription("选择一个可执行应用程序")
-        add_custom_btn.clicked.connect(self._add_custom_app)
-        layout.addWidget(add_custom_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        if not self._chip_widgets:
+            no_apps = QLabel("没有检测到可选择的已安装应用。")
+            no_apps.setObjectName("selectedEmpty")
+            no_apps.setWordWrap(True)
+            layout.addWidget(no_apps)
+
+        self._other_apps_button = QPushButton()
+        self._other_apps_button.setObjectName("addAppButton")
+        self._other_apps_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._other_apps_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._other_apps_button.setAccessibleName("选择其他已安装应用")
+        self._other_apps_button.setAccessibleDescription(
+            "打开未显示在常用区的已安装应用图标列表"
+        )
+        self._other_apps_button.clicked.connect(self._open_app_picker)
+        layout.addWidget(self._other_apps_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._refresh_other_apps_button()
 
         self._selected_summary = QLabel("已允许 0 个应用")
         self._selected_summary.setObjectName("selectedSummary")
@@ -817,7 +1284,9 @@ class SettingsPanel(QWidget):
         return section
 
     def _build_intensity_section(self) -> QFrame:
-        section, layout = self._new_section("保护强度", "每种强度都说明实际行为，随时可以在下次专注前调整。")
+        section, layout = self._new_section(
+            "保护强度", "每种强度都说明实际行为，随时可以在下次专注前调整。"
+        )
 
         choices_host = QWidget()
         choices_flow = FlowLayout(choices_host, horizontal_spacing=9, vertical_spacing=9)
@@ -928,73 +1397,85 @@ class SettingsPanel(QWidget):
     def _on_escape_setting_changed(self, _value: int) -> None:
         self._emit_config_changed()
 
-    def _add_custom_app(self) -> None:
-        if sys.platform == "darwin":
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "选择应用",
-                "/Applications",
-                "macOS 应用 (*.app)",
-            )
-        elif os.name == "nt":
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "选择应用",
-                "",
-                "Windows 应用 (*.exe *.lnk)",
-            )
-        else:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "选择应用",
-                "",
-                "可执行文件 (*)",
-            )
-
-        if not file_path:
+    def _open_app_picker(self) -> None:
+        remaining = self._remaining_installed_apps()
+        dialog = InstalledAppPickerDialog(remaining, (), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        identifier, display_name = self._custom_app_identity(file_path)
-        if file_path not in self._custom_apps:
-            self._custom_apps.append(file_path)
-        self._custom_display_names[identifier] = display_name
-        self._app_display_names[identifier] = display_name
-
-        common_chip = self._chip_widgets.get(identifier)
-        if common_chip and not common_chip.isChecked():
-            common_chip.setChecked(True)
+        selected_apps = dialog.selected_apps()
+        if not selected_apps:
             return
 
-        # Add a new icon tile for the custom app
-        if identifier not in self._chip_widgets:
-            new_chip = AppChip(display_name, identifier, file_path, self)
-            new_chip.toggled_app.connect(self._on_chip_toggle)
-            self._icon_grid.add_tile(new_chip)
-            self._chip_widgets[identifier] = new_chip
-            clear_icon_cache()
+        last_tile: AppChip | None = None
+        previous_updating = self._updating
+        self._updating = True
+        try:
+            for info in selected_apps:
+                process = str(info.get("process_name", "")).strip().casefold()
+                path = str(info.get("custom_path", "")).strip()
+                display = str(info.get("display_name", process)).strip() or process
+                if not process or not path:
+                    continue
+                validated_path = self._validated_app_path(path)
+                if not validated_path:
+                    continue
+                path = validated_path
+                self._pinned_processes.add(process)
+                if path not in self._custom_apps:
+                    self._custom_apps.append(path)
+                self._custom_display_names[process] = display
+                self._app_display_names[process] = display
+                last_tile = self._add_primary_tile(info, selected=True)
+                if process not in self._whitelist:
+                    self._whitelist.append(process)
+        finally:
+            self._updating = previous_updating
 
-        if identifier not in self._whitelist:
-            self._whitelist.append(identifier)
+        self._icon_grid.refresh()
         self._update_selected_display()
+        self._refresh_other_apps_button()
         self._emit_config_changed()
+        if last_tile:
+            last_tile.setFocus(Qt.FocusReason.OtherFocusReason)
 
-    def _custom_app_identity(self, file_path: str) -> tuple[str, str]:
+    @staticmethod
+    def _custom_app_identity(file_path: str) -> tuple[str, str]:
         path = Path(file_path)
         if sys.platform == "darwin" and path.name.lower().endswith(".app"):
             display_name = path.name[:-4]
             return display_name.lower(), display_name
         display_name = path.stem or path.name
-        identifier = path.name.lower() if os.name == "nt" else display_name.lower()
+        identity_path = file_path
+        if os.name == "nt" and path.suffix.casefold() == ".lnk":
+            identity_path = resolve_windows_app_target(
+                file_path,
+                display_hint=display_name,
+            )
+        identity_name = Path(identity_path).name or path.name
+        identifier = (
+            identity_name.casefold() if os.name == "nt" else display_name.casefold()
+        )
         return identifier, display_name
 
-    def _remove_selected_app(self, process_name: str) -> None:
-        self._custom_apps = [
-            path
-            for path in self._custom_apps
-            if self._custom_app_identity(path)[0] != process_name
-        ]
-        self._custom_display_names.pop(process_name, None)
+    @staticmethod
+    def _validated_app_path(file_path: str) -> str:
+        """Return a real launch target, or an empty string for stale saved entries."""
+        path = Path(file_path)
+        if sys.platform == "darwin":
+            return str(path) if path.is_dir() and path.suffix.casefold() == ".app" else ""
+        if os.name == "nt":
+            target = resolve_windows_app_target(
+                str(path),
+                display_hint=path.stem,
+            )
+            target_path = Path(target)
+            if target_path.is_file() and target_path.suffix.casefold() == ".exe":
+                return str(target_path)
+            return ""
+        return str(path) if path.is_file() else ""
 
+    def _remove_selected_app(self, process_name: str) -> None:
         chip = self._chip_widgets.get(process_name)
         if chip and chip.isChecked():
             chip.setChecked(False)
@@ -1067,20 +1548,67 @@ class SettingsPanel(QWidget):
         previous_updating = self._updating
         self._updating = True
         try:
-            self._whitelist = self._deduplicated(getattr(config, "whitelist", []))
+            requested_whitelist = [
+                process.casefold()
+                for process in self._deduplicated(getattr(config, "whitelist", []))
+            ]
             custom_apps = getattr(config, "custom_apps", None)
             if custom_apps is not None:
-                self._custom_apps = self._deduplicated(custom_apps)
+                self._custom_apps = []
 
             self._custom_display_names.clear()
-            for path in self._custom_apps:
-                identifier, display_name = self._custom_app_identity(path)
-                self._custom_display_names[identifier] = display_name
-                self._app_display_names[identifier] = display_name
+            for path in self._deduplicated(custom_apps or []):
+                validated_path = self._validated_app_path(path)
+                if not validated_path:
+                    continue
+                path_obj = Path(validated_path)
+                identifier, display_name = self._custom_app_identity(validated_path)
+                identifier = identifier.casefold()
+                catalog_info = self._installed_by_process.get(identifier)
+                resolved_display = (
+                    str(catalog_info.get("display_name", display_name))
+                    if catalog_info
+                    else display_name
+                )
+                info = dict(catalog_info) if catalog_info else {
+                    "display_name": resolved_display,
+                    "process_name": identifier,
+                    "custom_path": str(path_obj),
+                }
+                self._custom_apps.append(str(path_obj))
+                self._pinned_processes.add(identifier)
+                self._custom_display_names[identifier] = resolved_display
+                self._app_display_names[identifier] = resolved_display
+                if identifier not in self._installed_by_process:
+                    self._installed_by_process[identifier] = info
+                    self._installed_apps.append(info)
+                self._add_primary_tile(info)
+
+            # Migrate previously selected installed apps into the visible main
+            # grid even when they predate pinned-app persistence.
+            for process in requested_whitelist:
+                info = self._installed_by_process.get(process)
+                if info and process not in self._chip_widgets:
+                    self._pinned_processes.add(process)
+                    path = str(info.get("custom_path", ""))
+                    if path and path not in self._custom_apps:
+                        self._custom_apps.append(path)
+                    self._add_primary_tile(info)
+
+            available = set(self._installed_by_process)
+            self._whitelist = [
+                process for process in requested_whitelist if process in available
+            ]
 
             self._goal_edit.setText(str(getattr(config, "goal", "") or ""))
             self._custom_min_spin.setValue(
-                max(5, min(240, int(getattr(config, "duration_minutes", 25))))
+                max(
+                    MIN_FOCUS_MINUTES,
+                    min(
+                        MAX_FOCUS_MINUTES,
+                        int(getattr(config, "duration_minutes", 25)),
+                    ),
+                )
             )
             self._max_esc_spin.setValue(
                 max(0, min(10, int(getattr(config, "max_esc", 2))))
@@ -1098,7 +1626,9 @@ class SettingsPanel(QWidget):
                 chip.set_selected(process_name in self._whitelist)
 
             self._sync_duration_buttons()
+            self._icon_grid.refresh()
             self._update_selected_display()
+            self._refresh_other_apps_button()
         finally:
             self._updating = previous_updating
 

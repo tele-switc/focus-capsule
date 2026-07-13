@@ -42,6 +42,18 @@ class WindowMonitorThread(QThread):
         self._last_title = ""
         self._last_seen: Optional[Tuple[str, str]] = None
 
+    @property
+    def last_process(self) -> str:
+        return self._last_process
+
+    @property
+    def last_title(self) -> str:
+        return self._last_title
+
+    @property
+    def is_focus_capsule_foreground(self) -> bool:
+        return self._last_seen == ("__focus_capsule__", "")
+
     def start(self, priority=QThread.Priority.InheritPriority):
         """Start or restart monitoring without reusing stale thread state."""
         if self.isRunning():

@@ -1,12 +1,95 @@
-from enum import Enum
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from enum import Enum
 
 
 class IntensityMode(Enum):
     LIGHT = "Light"
     STANDARD = "Standard"
     DEEP = "Deep"
+
+
+@dataclass
+class ScheduleRule:
+    """A time-based app-locking rule following the China timezone (UTC+8).
+
+    The rule activates every day at *start_hour:start_minute* and releases at
+    *end_hour:end_minute*. While active, only *whitelisted_apps* are permitted
+    and the overlay protection behaves as if a Deep-mode session is running.
+    """
+    start_hour: int = 0
+    start_minute: int = 0
+    end_hour: int = 0
+    end_minute: int = 0
+    whitelisted_apps: list[str] = field(default_factory=list)
+    mode: str = "Deep"
+    enabled: bool = True
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        for name, minimum, maximum in (
+            ("start_hour", 0, 23),
+            ("start_minute", 0, 59),
+            ("end_hour", 0, 23),
+            ("end_minute", 0, 59),
+        ):
+            try:
+                value = int(getattr(self, name))
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Invalid schedule value: {name}") from error
+            if not minimum <= value <= maximum:
+                raise ValueError(f"Schedule value out of range: {name}")
+            setattr(self, name, value)
+
+        if not isinstance(self.whitelisted_apps, (list, tuple, set)):
+            raise ValueError("whitelisted_apps must be a sequence")
+        self.whitelisted_apps = list(
+            dict.fromkeys(
+                str(app).strip().casefold()
+                for app in self.whitelisted_apps
+                if str(app).strip()
+            )
+        )
+        self.mode = self.mode if self.mode in {"Light", "Standard", "Deep"} else "Deep"
+        self.label = str(self.label or "").strip()
+
+    def to_dict(self) -> dict:
+        return {
+            "start_hour": self.start_hour,
+            "start_minute": self.start_minute,
+            "end_hour": self.end_hour,
+            "end_minute": self.end_minute,
+            "whitelisted_apps": list(self.whitelisted_apps),
+            "mode": self.mode,
+            "enabled": self.enabled,
+            "label": self.label,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ScheduleRule":
+        if not isinstance(data, dict):
+            raise TypeError("Schedule rule must be an object")
+        enabled_value = data.get("enabled", True)
+        if isinstance(enabled_value, str):
+            normalized = enabled_value.strip().casefold()
+            if normalized in {"true", "1", "yes", "on"}:
+                enabled = True
+            elif normalized in {"false", "0", "no", "off", ""}:
+                enabled = False
+            else:
+                raise ValueError("Invalid enabled value")
+        else:
+            enabled = bool(enabled_value)
+        return cls(
+            start_hour=int(data.get("start_hour", 0)),
+            start_minute=int(data.get("start_minute", 0)),
+            end_hour=int(data.get("end_hour", 0)),
+            end_minute=int(data.get("end_minute", 0)),
+            whitelisted_apps=data.get("whitelisted_apps", []),
+            mode=str(data.get("mode", "Deep")),
+            enabled=enabled,
+            label=str(data.get("label", "") or ""),
+        )
+
 
 
 class SessionStatus(Enum):
@@ -20,19 +103,19 @@ class SessionStatus(Enum):
 
 @dataclass
 class FocusConfig:
-    whitelist: List[str] = field(default_factory=list)
+    whitelist: list[str] = field(default_factory=list)
     duration_minutes: int = 25
     mode: str = "Standard"
     max_esc: int = 2
     esc_break_minutes: int = 3
-    goal: Optional[str] = None
-    custom_apps: List[str] = field(default_factory=list)
+    goal: str | None = None
+    custom_apps: list[str] = field(default_factory=list)
 
 
 @dataclass
 class DistractionEntry:
     process_name: str
-    window_title: Optional[str]
+    window_title: str | None
     occurred_at: str
 
 
@@ -45,7 +128,7 @@ class SessionRecord:
     distraction_count: int
     esc_used: int
     mode: str
-    whitelisted_apps: List[str]
-    distractions: List[Dict] = field(default_factory=list)
-    goal: Optional[str] = None
+    whitelisted_apps: list[str]
+    distractions: list[dict] = field(default_factory=list)
+    goal: str | None = None
     outcome: str = "completed"

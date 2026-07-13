@@ -80,6 +80,13 @@ class SessionControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.break_remaining, 0)
         self.assertEqual(self.controller.status, SessionStatus.RUNNING)
 
+    def test_invalid_non_positive_duration_is_normalized(self):
+        invalid = FocusConfig(whitelist=["code.exe"], duration_minutes=0)
+        self.controller.start_session(invalid)
+        self.controller._timer.stop()
+        self.assertEqual(invalid.duration_minutes, 1)
+        self.assertEqual(self.controller._total_seconds, 60)
+
     def test_record_keeps_actual_start_goal_outcome_and_distraction_details(self):
         started_at = self.controller._started_at
         self.controller.on_foreground_change("Chrome.EXE", "Research notes")

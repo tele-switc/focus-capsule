@@ -28,3 +28,7 @@ assets/FocusCapsule.iconset/
 *.dmg
 .DS_Store
 *.zip
+
+# Installers
+*.exe
+*.sha256

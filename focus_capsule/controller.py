@@ -1,10 +1,9 @@
-from datetime import datetime
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from datetime import datetime
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from focus_capsule.models import FocusConfig, SessionRecord, SessionStatus, DistractionEntry
+from focus_capsule.models import DistractionEntry, FocusConfig, SessionRecord, SessionStatus
 from focus_capsule.monitor import WindowMonitorThread
 
 
@@ -45,17 +44,17 @@ class SessionController(QObject):
         super().__init__(parent)
         self._history = history_service
         self._overlay = overlay_service
-        self._config: Optional[FocusConfig] = None
+        self._config: FocusConfig | None = None
         self._total_seconds = 0
         self._elapsed = 0
         self._esc_remaining = 0
         self._esc_used = 0
         self._distractions = 0
-        self._distraction_apps: Dict[str, int] = {}
-        self._distraction_events: List[DistractionEntry] = []
+        self._distraction_apps: dict[str, int] = {}
+        self._distraction_events: list[DistractionEntry] = []
         self._status = SessionStatus.IDLE
         self._break_remaining = 0
-        self._started_at: Optional[datetime] = None
+        self._started_at: datetime | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_timer_tick)
@@ -103,6 +102,11 @@ class SessionController(QObject):
         }
 
     def start_session(self, config: FocusConfig):
+        try:
+            duration_minutes = int(config.duration_minutes)
+        except (TypeError, ValueError):
+            duration_minutes = 25
+        config.duration_minutes = max(1, duration_minutes)
         self._config = config
         self._total_seconds = config.duration_minutes * 60
         self._elapsed = 0
@@ -136,7 +140,11 @@ class SessionController(QObject):
             esc_used=self._esc_used,
             distraction_count=self._distractions,
             mode=self._config.mode if self._config else "Standard",
-            current_app=self._config.whitelist[0] if self._config and self._config.whitelist else "",
+            current_app=(
+                self._config.whitelist[0]
+                if self._config and self._config.whitelist
+                else ""
+            ),
             break_remaining=self._break_remaining
         )
         self.update_requested.emit(update)

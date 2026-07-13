@@ -1,10 +1,16 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.0"
 #endif
 
 #define MyAppName "Focus Capsule"
 #define MyAppExeName "Focus Capsule.exe"
 #define MyAppPublisher "Focus Capsule Project"
+#ifndef MyAppSource
+  #define MyAppSource "..\dist\Focus Capsule"
+#endif
+#ifndef MyOutputDir
+  #define MyOutputDir "..\dist\installer"
+#endif
 
 [Setup]
 AppId={{A8DAE576-88A8-49F8-A005-E1C7000AB862}
@@ -21,7 +27,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
-OutputDir=..\dist\installer
+OutputDir={#MyOutputDir}
 OutputBaseFilename=Focus-Capsule-{#MyAppVersion}-Windows-x64-Setup
 SetupIconFile=..\assets\focus-capsule.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -39,7 +45,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\Focus Capsule\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyAppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Focus Capsule"; Filename: "{app}\{#MyAppExeName}"
