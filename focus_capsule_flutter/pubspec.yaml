@@ -1,0 +1,28 @@
+name: focus_capsule_flutter
+description: "专注神器 - 温柔而坚定的专注守护者,移动端专注力工具。"
+publish_to: 'none'
+
+version: 2.1.0+1
+
+environment:
+  sdk: ^3.6.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.3.3
+  intl: ^0.20.2
+  path: ^1.9.0
+  provider: ^6.1.2
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/
