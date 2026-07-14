@@ -10,6 +10,7 @@ import json
 
 from PyQt6.QtCore import QSettings, Qt, QTime, pyqtSignal
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QFrame,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
@@ -164,6 +166,11 @@ class SchedulePanel(QWidget):
         self._app_display_names = {process: name for name, process in COMMON_APPS}
         self._installed_by_process: dict[str, dict] = {}
         self._loading = False
+        self._status_labels: dict[int, QLabel] = {}
+        self._app_labels: dict[int, QLabel] = {}
+        self._intensity_cards: dict[int, list] = {}
+        self._esc_spin: QSpinBox | None = None
+        self._dur_spin: QSpinBox | None = None
         self.setObjectName("schedulePanel")
         self.setStyleSheet(SCHEDULE_STYLESHEET)
         self._load_installed_catalog()
@@ -345,6 +352,99 @@ class SchedulePanel(QWidget):
 
         layout.addLayout(apps_row)
 
+        # Intensity & escape settings row
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(12)
+
+        # Intensity selector
+        intensity_label = QLabel("强度：")
+        intensity_label.setObjectName("scheduleHint")
+        intensity_label.setFixedWidth(40)
+        settings_row.addWidget(intensity_label)
+
+        intensity_group = QButtonGroup(card)
+        intensity_group.setExclusive(True)
+        intensity_cards = []
+        for mode_key, mode_label in (("Light", "轻"), ("Standard", "标"), ("Deep", "深")):
+            btn = QPushButton(mode_label)
+            btn.setCheckable(True)
+            btn.setFixedWidth(36)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #0f171f;
+                    color: #cbd5da;
+                    border: 1px solid #334250;
+                    border-radius: 6px;
+                    font-size: 12px;
+                }
+                QPushButton:checked {
+                    background-color: #172821;
+                    color: #e8fffa;
+                    border: 2px solid #67cfbb;
+                }
+                QPushButton:hover {
+                    border-color: #536574;
+                }
+            """)
+            btn.clicked.connect(
+                lambda _checked=False, m=mode_key, idx=index: self._on_intensity_selected(idx, m)
+            )
+            intensity_group.addButton(btn)
+            intensity_cards.append(btn)
+            settings_row.addWidget(btn)
+
+        # Sync intensity selection to rule's current mode
+        current_mode = getattr(rule, "mode", "Deep")
+        for i, mode_key in enumerate(("Light", "Standard", "Deep")):
+            intensity_cards[i].setChecked(mode_key == current_mode)
+
+        settings_row.addStretch()
+
+        # Escape count
+        esc_label = QLabel("休息：")
+        esc_label.setObjectName("scheduleHint")
+        esc_label.setFixedWidth(36)
+        settings_row.addWidget(esc_label)
+
+        self._esc_spin = QSpinBox()
+        self._esc_spin.setObjectName("compactSpin")
+        self._esc_spin.setRange(0, 10)
+        self._esc_spin.setValue(rule.max_esc if hasattr(rule, "max_esc") else 0)
+        self._esc_spin.setSuffix(" 次")
+        self._esc_spin.setMinimumWidth(72)
+        self._esc_spin.setKeyboardTracking(False)
+        self._esc_spin.setProperty("_rule_index", index)
+        self._esc_spin.setProperty("_field", "max_esc")
+        self._esc_spin.valueChanged.connect(
+            lambda _v, _idx=index: self._on_escape_changed(_idx, "max_esc")
+        )
+        settings_row.addWidget(self._esc_spin)
+
+        # Break duration
+        dur_label = QLabel("/ ")
+        dur_label.setObjectName("scheduleHint")
+        settings_row.addWidget(dur_label)
+
+        self._dur_spin = QSpinBox()
+        self._dur_spin.setObjectName("compactSpin")
+        self._dur_spin.setRange(1, 15)
+        self._dur_spin.setValue(rule.esc_break_minutes if hasattr(rule, "esc_break_minutes") else 3)
+        self._dur_spin.setSuffix(" 分钟")
+        self._dur_spin.setMinimumWidth(72)
+        self._dur_spin.setKeyboardTracking(False)
+        self._dur_spin.valueChanged.connect(
+            lambda _v, _idx=index: self._on_escape_changed(_idx, "esc_break_minutes")
+        )
+        settings_row.addWidget(self._dur_spin)
+
+        settings_row.addStretch()
+        layout.addLayout(settings_row)
+
+        # Store intensity buttons reference for sync
+        self._intensity_cards = getattr(self, "_intensity_cards", {})
+        self._intensity_cards[index] = intensity_cards
+
         return card
 
     def _display_name_for(self, process_name: str) -> str:
@@ -363,6 +463,8 @@ class SchedulePanel(QWidget):
             end_minute=0,
             whitelisted_apps=[],
             mode="Deep",
+            max_esc=0,
+            esc_break_minutes=3,
             # A newly-created empty rule must never begin locking immediately.
             enabled=False,
         )
@@ -424,6 +526,36 @@ class SchedulePanel(QWidget):
             rule.start_minute = start_time.minute()
             rule.end_hour = end_time.hour()
             rule.end_minute = end_time.minute()
+            self._manager.update_rule(index, rule)
+            self.save_rules()
+            self.rules_changed.emit()
+
+    def _on_intensity_selected(self, index: int, mode: str) -> None:
+        if self._loading:
+            return
+        rules = self._manager.rules
+        if 0 <= index < len(rules):
+            rule = rules[index]
+            rule.mode = mode
+            # Sync button states
+            cards = self._intensity_cards.get(index, [])
+            for i, mode_key in enumerate(("Light", "Standard", "Deep")):
+                if i < len(cards):
+                    cards[i].setChecked(mode_key == mode)
+            self._manager.update_rule(index, rule)
+            self.save_rules()
+            self.rules_changed.emit()
+
+    def _on_escape_changed(self, index: int, field: str) -> None:
+        if self._loading:
+            return
+        rules = self._manager.rules
+        if 0 <= index < len(rules):
+            rule = rules[index]
+            if field == "max_esc":
+                rule.max_esc = self._esc_spin.value()
+            elif field == "esc_break_minutes":
+                rule.esc_break_minutes = self._dur_spin.value()
             self._manager.update_rule(index, rule)
             self.save_rules()
             self.rules_changed.emit()

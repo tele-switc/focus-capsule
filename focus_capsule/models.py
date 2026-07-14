@@ -24,6 +24,8 @@ class ScheduleRule:
     mode: str = "Deep"
     enabled: bool = True
     label: str = ""
+    max_esc: int = 2
+    esc_break_minutes: int = 3
 
     def __post_init__(self) -> None:
         for name, minimum, maximum in (
@@ -51,6 +53,14 @@ class ScheduleRule:
         )
         self.mode = self.mode if self.mode in {"Light", "Standard", "Deep"} else "Deep"
         self.label = str(self.label or "").strip()
+        try:
+            self.max_esc = max(0, min(10, int(self.max_esc or 2)))
+        except (TypeError, ValueError):
+            self.max_esc = 2
+        try:
+            self.esc_break_minutes = max(1, min(15, int(self.esc_break_minutes or 3)))
+        except (TypeError, ValueError):
+            self.esc_break_minutes = 3
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +72,8 @@ class ScheduleRule:
             "mode": self.mode,
             "enabled": self.enabled,
             "label": self.label,
+            "max_esc": self.max_esc,
+            "esc_break_minutes": self.esc_break_minutes,
         }
 
     @classmethod
@@ -88,6 +100,8 @@ class ScheduleRule:
             mode=str(data.get("mode", "Deep")),
             enabled=enabled,
             label=str(data.get("label", "") or ""),
+            max_esc=data.get("max_esc", 2),
+            esc_break_minutes=data.get("esc_break_minutes", 3),
         )
 
 

@@ -222,6 +222,32 @@ class SessionController(QObject):
         if not process:
             return
 
+        allowed_system = {
+            "explorer.exe",
+            "explorer",
+            "finder",
+            "shell.exe",
+            "windows.ui.shell.lightswitch.exe",
+            "dock",
+            "launchpad",
+            "launcher",
+            "startmenuexperiencehost",
+            "searchhost.exe",
+            "taskhostw.exe",
+            "ctfmon.exe",
+            "services.exe",
+            "csrss.exe",
+            "winlogon.exe",
+            "smss.exe",
+            "wininit.exe",
+            "svchost.exe",
+            "lsass.exe",
+            "runtimebroker.exe",
+            "dllhost.exe",
+        }
+        if process in allowed_system:
+            return
+
         allowed = any(p.strip().casefold() == process for p in self._config.whitelist)
         if allowed:
             if self._status == SessionStatus.OVERLAY:

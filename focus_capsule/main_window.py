@@ -493,8 +493,8 @@ class MainWindow(QMainWindow):
             mode="Deep",
             goal="通过日程锁定进行专注",
             whitelist=rule.whitelisted_apps,
-            max_esc=0,
-            esc_break_minutes=3,
+            max_esc=getattr(rule, "max_esc", 0),
+            esc_break_minutes=getattr(rule, "esc_break_minutes", 3),
         )
 
         try:
