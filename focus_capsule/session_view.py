@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from focus_capsule.controller import SessionUpdate
 from focus_capsule.models import FocusConfig, SessionStatus
 from focus_capsule.widgets import FocusRing
+from focus_capsule.theme import BREAK_ACCENT, BREAK_LIGHT, WEIGHT_SECTION, WEIGHT_NUMBER, TEXT_TERTIARY
 
 
 MODE_LABELS = {
@@ -114,9 +115,9 @@ class SessionViewWindow(QWidget):
         break_layout = QHBoxLayout(self._break_panel)
         break_layout.setContentsMargins(14, 10, 14, 10)
         break_title = QLabel("正在临时离开")
-        break_title.setStyleSheet("color:#F0C98F;font-weight:650;")
+        break_title.setStyleSheet(f"color:{BREAK_ACCENT};font-weight:{WEIGHT_SECTION};")
         self._break_timer = QLabel("03:00 后自动继续")
-        self._break_timer.setStyleSheet("color:#F5D9AF;font-weight:700;")
+        self._break_timer.setStyleSheet(f"color:{BREAK_LIGHT};font-weight:{WEIGHT_NUMBER};")
         self._break_timer.setAlignment(Qt.AlignmentFlag.AlignRight)
         break_layout.addWidget(break_title)
         break_layout.addStretch()

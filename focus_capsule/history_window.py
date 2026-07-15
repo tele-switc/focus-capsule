@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 from focus_capsule.models import SessionRecord
 from focus_capsule.dialogs import ask_confirmation
 from focus_capsule.widgets import FocusRing
+from focus_capsule.theme import ACCENT, FONT_SECTION
 
 
 MODE_LABELS = {"Light": "轻柔", "Standard": "标准", "Deep": "深度"}
@@ -82,7 +83,7 @@ class HistoryWindow(QDialog):
         empty_layout.addStretch()
         empty_icon = QLabel("◌")
         empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_icon.setStyleSheet("color:#67CFBB;font-size:42px;")
+        empty_icon.setStyleSheet(f"color:{ACCENT};font-size:42px;")
         empty_title = QLabel("第一轮专注会显示在这里")
         empty_title.setObjectName("sectionTitle")
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)

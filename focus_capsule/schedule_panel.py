@@ -27,6 +27,11 @@ from PyQt6.QtWidgets import (
 
 from focus_capsule.models import ScheduleRule
 from focus_capsule.settings_panel import COMMON_APPS, InstalledAppPickerDialog
+from focus_capsule.theme import (
+    ACCENT, TEXT_TERTIARY, TEXT_SECONDARY, FONT_SECTION, FONT_META, FONT_BODY,
+    WEIGHT_BUTTON, RADIUS_MD, INPUT_BG, BORDER_NORMAL, BORDER_STRONG,
+    ACCENT_DARK_BG, ACCENT_TEXT, SURFACE_3,
+)
 
 SCHEDULE_STYLESHEET = """
 QFrame#scheduleSection {
@@ -292,7 +297,7 @@ class SchedulePanel(QWidget):
         )
 
         arrow = QLabel("→")
-        arrow.setStyleSheet("color:#718097;font-size:14px;")
+        arrow.setStyleSheet(f"color:{TEXT_TERTIARY};font-size:{FONT_SECTION}px;")
 
         top.addWidget(time_start)
         top.addWidget(arrow)
@@ -300,13 +305,13 @@ class SchedulePanel(QWidget):
         top.addStretch()
 
         status_label = QLabel()
-        status_label.setStyleSheet("font-size:11px;")
+        status_label.setStyleSheet(f"font-size:{FONT_META}px;")
         if is_active:
             status_label.setText("● 锁定中")
-            status_label.setStyleSheet("color:#67cfbb;font-size:11px;font-weight:600;")
+            status_label.setStyleSheet(f"color:{ACCENT};font-size:{FONT_META}px;font-weight:{WEIGHT_BUTTON};")
         else:
             status_label.setText("待命")
-            status_label.setStyleSheet("color:#718097;font-size:11px;")
+            status_label.setStyleSheet(f"color:{TEXT_TERTIARY};font-size:{FONT_META}px;")
         top.addWidget(status_label)
 
         self._status_labels = getattr(self, "_status_labels", {})
@@ -363,27 +368,35 @@ class SchedulePanel(QWidget):
         intensity_group = QButtonGroup(card)
         intensity_group.setExclusive(True)
         intensity_cards = []
-        for mode_key, mode_label in (("Light", "轻"), ("Standard", "标"), ("Deep", "深")):
+        for mode_key, mode_label in (
+            ("Light", "轻度"),
+            ("Standard", "标准"),
+            ("Deep", "深度"),
+        ):
             btn = QPushButton(mode_label)
             btn.setCheckable(True)
-            btn.setFixedWidth(36)
+            btn.setMinimumWidth(72)
+            btn.setMinimumHeight(34)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #0f171f;
-                    color: #cbd5da;
-                    border: 1px solid #334250;
-                    border-radius: 6px;
-                    font-size: 12px;
-                }
-                QPushButton:checked {
-                    background-color: #172821;
-                    color: #e8fffa;
-                    border: 2px solid #67cfbb;
-                }
-                QPushButton:hover {
-                    border-color: #536574;
-                }
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {INPUT_BG};
+                    color: {TEXT_SECONDARY};
+                    border: 1px solid {BORDER_NORMAL};
+                    border-radius: {RADIUS_MD}px;
+                    font-size: {FONT_BODY}px;
+                    font-weight: {WEIGHT_BUTTON};
+                    padding: 4px 14px;
+                }}
+                QPushButton:checked {{
+                    background-color: {ACCENT_DARK_BG};
+                    color: {ACCENT_TEXT};
+                    border: 2px solid {ACCENT};
+                }}
+                QPushButton:hover {{
+                    border-color: {BORDER_STRONG};
+                    background-color: {SURFACE_3};
+                }}
             """)
             btn.clicked.connect(
                 lambda _checked=False, m=mode_key, idx=index: self._on_intensity_selected(idx, m)

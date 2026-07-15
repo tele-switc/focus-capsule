@@ -8,6 +8,21 @@ from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from focus_capsule.theme import (
+    ACCENT, SURFACE_1, BORDER_NORMAL, TEXT_PRIMARY, TEXT_SECONDARY,
+    TEXT_TERTIARY, TEXT_DISABLED, FONT_PAGE_TITLE, FONT_SECTION,
+    FONT_BODY, FONT_AUX, FONT_META, WEIGHT_TITLE, RADIUS_XL,
+    BREAK_BG, BREAK_ACCENT, BREAK_LIGHT, WARNING,
+)
+
+HAS_WIN32_POLL = False
+try:
+    import win32gui
+    import win32process
+    HAS_WIN32_POLL = True
+except ImportError:
+    pass
+
 
 class OverlayService(QObject):
     def __init__(self, parent=None):
@@ -24,13 +39,14 @@ class OverlayService(QObject):
         except RuntimeError:
             return False
 
-    def show_overlay(self, app_name: str, return_seconds: int = 3):
+    def show_overlay(self, app_name: str, return_seconds: int = 3, allowed_apps: list[str] | None = None):
         if self._alive(self._overlay_window):
             return
         window = OverlayWindow(
             app_name,
             return_seconds,
             lock_until_switch=return_seconds >= 5,
+            allowed_apps=allowed_apps,
         )
         self._overlay_window = window
         window.destroyed.connect(lambda: self._clear_overlay(window))
@@ -78,12 +94,14 @@ class OverlayWindow(QWidget):
         app_name: str,
         return_seconds: int = 3,
         lock_until_switch: bool = False,
+        allowed_apps: list[str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self._allow_close = False
         self._seconds_left = max(1, return_seconds)
         self._lock_until_switch = lock_until_switch
+        self._allowed_apps = {a.strip().casefold() for a in (allowed_apps or [])}
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
@@ -103,7 +121,7 @@ class OverlayWindow(QWidget):
         center = QFrame()
         center.setFixedWidth(520)
         center.setStyleSheet(
-            "QFrame{background:#101B2A;border:1px solid #2C3F5C;border-radius:22px;}"
+            f"QFrame{{background:{SURFACE_1};border:1px solid {BORDER_NORMAL};border-radius:{RADIUS_XL}px;}}"
         )
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(44, 38, 44, 38)
@@ -111,21 +129,21 @@ class OverlayWindow(QWidget):
 
         marker = QLabel("◉")
         marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        marker.setStyleSheet("color:#67CFBB;font-size:28px;")
+        marker.setStyleSheet(f"color:{ACCENT};font-size:28px;")
         title = QLabel("这不在本轮专注计划中")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color:#F5F7FA;font-size:24px;font-weight:700;")
+        title.setStyleSheet(f"color:{TEXT_PRIMARY};font-size:{FONT_PAGE_TITLE}px;font-weight:{WEIGHT_TITLE};")
         friendly = self._friendly_app_name(app_name)
         subtitle = QLabel(f"请切回 {friendly}，继续刚才的目标")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color:#A4B1C2;font-size:14px;")
+        subtitle.setStyleSheet(f"color:{TEXT_SECONDARY};font-size:{FONT_SECTION}px;")
         self._countdown = QLabel()
         self._countdown.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._countdown.setStyleSheet("color:#718198;font-size:12px;")
+        self._countdown.setStyleSheet(f"color:{TEXT_TERTIARY};font-size:{FONT_BODY}px;")
         hint = QLabel("使用 Alt+Tab / ⌘+Tab 切换应用")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet("color:#617086;font-size:11px;")
+        hint.setStyleSheet(f"color:{TEXT_DISABLED};font-size:{FONT_AUX}px;")
 
         center_layout.addWidget(marker)
         center_layout.addWidget(title)
@@ -140,6 +158,17 @@ class OverlayWindow(QWidget):
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_tick)
         self._timer.start()
+
+        # When lock_until_switch is active (Deep mode), poll the foreground
+        # window every second so the overlay can detect when the user switches
+        # back to an allowed app and dismiss itself.
+        if self._lock_until_switch and self._allowed_apps:
+            self._poll_timer = QTimer(self)
+            self._poll_timer.setInterval(800)
+            self._poll_timer.timeout.connect(self._poll_foreground)
+            self._poll_timer.start()
+        else:
+            self._poll_timer = None
 
     @staticmethod
     def _friendly_app_name(name: str) -> str:
@@ -160,6 +189,29 @@ class OverlayWindow(QWidget):
             if not self._lock_until_switch:
                 self.allow_close()
                 self.close()
+
+    def _poll_foreground(self):
+        """Check whether the user has switched back to an allowed app."""
+        try:
+            import psutil
+            import os
+            if HAS_WIN32_POLL:
+                hwnd = win32gui.GetForegroundWindow()
+                if not hwnd:
+                    return
+                # Skip our own overlay window
+                if hwnd == int(self.winId()):
+                    return
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if not pid or pid == os.getpid():
+                    return
+                process_name = psutil.Process(pid).name().strip().casefold()
+                if process_name in self._allowed_apps:
+                    self._poll_timer.stop()
+                    self.allow_close()
+                    self.close()
+        except Exception:
+            pass
 
     def allow_close(self):
         self._allow_close = True
@@ -212,15 +264,15 @@ class BreakWindow(QWidget):
         mark.setFixedSize(36, 36)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setStyleSheet(
-            "background:#3B2D1D;color:#F0C98F;border:1px solid #5A4529;"
-            "border-radius:10px;font-size:14px;font-weight:700;"
+            f"background:{BREAK_BG};color:{BREAK_ACCENT};border:1px solid {WARNING};"
+            f"border-radius:10px;font-size:14px;font-weight:700;"
         )
         labels = QVBoxLayout()
         labels.setSpacing(1)
         title = QLabel("临时离开")
-        title.setStyleSheet("color:#E8EDF3;font-size:12px;font-weight:650;")
+        title.setStyleSheet(f"color:{TEXT_PRIMARY};font-size:12px;font-weight:650;")
         self._timer_label = QLabel()
-        self._timer_label.setStyleSheet("color:#F0C98F;font-size:18px;font-weight:700;")
+        self._timer_label.setStyleSheet(f"color:{BREAK_ACCENT};font-size:18px;font-weight:700;")
         labels.addWidget(title)
         labels.addWidget(self._timer_label)
         layout.addWidget(mark)

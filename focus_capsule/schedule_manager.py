@@ -109,6 +109,10 @@ class ScheduleManager(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_timer_tick)
+        # Rules whose enforcement the user manually overroade; their hash
+        # identifies the (start, end) window so we don't re-trigger after the
+        # user explicitly ended a schedule session.
+        self._suppressed_keys: set[tuple[int, int, int, int]] = set()
 
     @property
     def rules(self) -> list[ScheduleRule]:
@@ -128,6 +132,7 @@ class ScheduleManager(QObject):
         """
         old_active = self._active_rule
         self._rules = list(rules)
+        self._suppressed_keys.clear()
         new_active = None
         for rule in self._rules:
             if _rule_is_active(rule):
@@ -208,15 +213,36 @@ class ScheduleManager(QObject):
                 return
             old = self._active_rule
             self._active_rule = None
+            # When the rule's window ends, also clear its suppression.
+            self._suppressed_keys.discard(
+                (old.start_hour, old.start_minute, old.end_hour, old.end_minute)
+            )
             self.rule_released.emit(old)
         for rule in self._rules:
             if _rule_is_active(rule, now):
+                key = (rule.start_hour, rule.start_minute, rule.end_hour, rule.end_minute)
+                if key in self._suppressed_keys:
+                    # User manually ended this rule's session; don't re-enforce.
+                    self.tick.emit(None, 0)
+                    return
                 self._active_rule = rule
                 self.rule_activated.emit(rule)
                 seconds_left = _seconds_until_next_boundary(rule, now)
                 self.tick.emit(rule, seconds_left)
                 return
         self.tick.emit(None, 0)
+
+    def suppress_active_rule(self) -> None:
+        """Mark the current active rule as user-terminated so it won't
+        re-enforce until the time window expires and re-enters."""
+        if self._active_rule:
+            r = self._active_rule
+            self._suppressed_keys.add(
+                (r.start_hour, r.start_minute, r.end_hour, r.end_minute)
+            )
+            old = self._active_rule
+            self._active_rule = None
+            self.rule_released.emit(old)
 
     def active_whitelist(self) -> list[str]:
         if self._active_rule:

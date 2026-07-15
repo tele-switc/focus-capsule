@@ -3,24 +3,21 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QCloseEvent
+from PyQt6.QtGui import QAction, QCloseEvent, QResizeEvent
 from PyQt6.QtWidgets import (
-    QApplication,
-    QButtonGroup,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QMenu,
-    QPushButton,
-    QSizePolicy,
-    QStackedWidget,
-    QSystemTrayIcon,
-    QVBoxLayout,
-    QWidget,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel,
+    QMainWindow, QMenu, QPushButton, QScrollArea, QSizePolicy,
+    QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from focus_capsule.controller import SessionController, SessionUpdate
+from PyQt6.QtWidgets import QButtonGroup
+
+from focus_capsule.ai_report_service import AIReportService
+from focus_capsule.ambient_background import AmbientBackground
+from focus_capsule.calendar_page import CalendarPage
+from focus_capsule.data_models import AppConfig, china_today
+from focus_capsule.data_store import DataStore
 from focus_capsule.dialogs import ask_confirmation, show_information
 from focus_capsule.history_db import HistoryService
 from focus_capsule.history_window import CompletionWindow, HistoryWindow
@@ -31,13 +28,10 @@ from focus_capsule.schedule_manager import ScheduleManager
 from focus_capsule.schedule_panel import SchedulePanel
 from focus_capsule.session_view import SessionViewWindow
 from focus_capsule.settings_panel import SettingsPanel
+from focus_capsule.theme import MODE_LABELS, TEXT_TERTIARY, ACCENT_DARK_BG, ACCENT
+from focus_capsule.trend_page import TrendPage
+from focus_capsule.trend_service import TrendService
 from focus_capsule.widgets import FocusRing
-
-MODE_LABELS = {
-    "Light": "轻柔记录",
-    "Standard": "标准提醒",
-    "Deep": "深度拦截",
-}
 
 
 class MainWindow(QMainWindow):
@@ -45,8 +39,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("专注舱 · Focus Capsule")
         self.setObjectName("appWindow")
-        self.setMinimumSize(900, 620)
-        self.resize(1120, 740)
+        self.setMinimumSize(980, 680)
+        self.resize(1240, 800)
 
         self._quitting = False
         self._session_view: SessionViewWindow | None = None
@@ -62,8 +56,26 @@ class MainWindow(QMainWindow):
         self._schedule_manager = ScheduleManager(self)
         self._schedule_panel = SchedulePanel(self._schedule_manager, self)
 
+        # v2.1 services
+        self._data_store = DataStore()
+        self._app_config = self._data_store.load_app_config()
+        self._trend_service = TrendService(self._history_service, self._app_config)
+        self._ai_service = AIReportService(
+            self._history_service, self._data_store, self._app_config
+        )
+
+        # v2.1 UI pages
+        self._calendar_page = CalendarPage(self._trend_service, self)
+        self._trend_page = TrendPage(self._trend_service, self)
+        from focus_capsule.daily_goal_page import DailyGoalWidget
+        self._daily_goal_widget = DailyGoalWidget(
+            self._data_store, self._trend_service, self._ai_service, self._app_config, self
+        )
+
+        # Session update → update today's goal
         self._session_controller.update_requested.connect(self._on_session_update)
         self._session_controller.session_completed.connect(self._on_session_completed)
+        self._session_controller.session_completed.connect(self._on_session_record_saved)
         self._session_controller.tray_update.connect(self._on_tray_update)
         self._window_monitor.foreground_changed.connect(self._on_foreground_change)
 
@@ -95,117 +107,167 @@ class MainWindow(QMainWindow):
         central.setObjectName("appWindow")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(30, 22, 30, 26)
-        root.setSpacing(20)
+        root.setContentsMargins(24, 18, 24, 20)
+        root.setSpacing(16)
 
-        header = QHBoxLayout()
-        header.setSpacing(12)
+        # ── Ambient background layer ────────────────────────────
+        # Lives behind every other widget; transparent to mouse events.
+        self._ambient = AmbientBackground(central, orb_count=14)
+        self._ambient.lower()
+
+        # ── Top bar ────────────────────────────────────────────
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(12)
 
         brand_mark = QLabel("◉")
         brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand_mark.setFixedSize(42, 42)
+        brand_mark.setFixedSize(38, 38)
         brand_mark.setStyleSheet(
-            "background:#17342F;color:#77D9C6;border:1px solid #2D5B50;"
-            "border-radius:13px;font-size:20px;font-weight:700;"
+            f"background:{ACCENT_DARK_BG};color:{ACCENT};border:1px solid #2D5B50;"
+            f"border-radius:12px;font-size:18px;font-weight:700;"
         )
-        header.addWidget(brand_mark)
+        top_bar.addWidget(brand_mark)
 
         brand_text = QVBoxLayout()
-        brand_text.setSpacing(1)
+        brand_text.setSpacing(0)
         title = QLabel("专注舱")
         title.setObjectName("brandTitle")
         subtitle = QLabel("Focus Capsule · 把注意力留给真正重要的事")
         subtitle.setObjectName("brandSubtitle")
         brand_text.addWidget(title)
         brand_text.addWidget(subtitle)
-        header.addLayout(brand_text)
-        header.addStretch()
+        top_bar.addLayout(brand_text)
+        top_bar.addStretch()
 
         privacy = QLabel("●  数据仅保存在本机")
         privacy.setObjectName("tinyMuted")
         privacy.setToolTip("专注记录不会上传到云端")
-        header.addWidget(privacy)
+        top_bar.addWidget(privacy)
 
         history_button = QPushButton("历史记录")
         history_button.setObjectName("ghostButton")
         history_button.setAccessibleName("打开专注历史记录")
         history_button.clicked.connect(self._show_history)
-        header.addWidget(history_button)
+        top_bar.addWidget(history_button)
 
         quit_button = QPushButton("退出")
         quit_button.setObjectName("ghostButton")
         quit_button.clicked.connect(self._quit_app)
-        header.addWidget(quit_button)
-        root.addLayout(header)
+        top_bar.addWidget(quit_button)
+        root.addLayout(top_bar)
 
         divider = QFrame()
         divider.setObjectName("divider")
         divider.setFrameShape(QFrame.Shape.HLine)
         root.addWidget(divider)
 
-        content = QHBoxLayout()
-        content.setSpacing(22)
+        # ── Segmented navigation ───────────────────────────────
+        nav_host = QFrame()
+        nav_host.setObjectName("segmentedControl")
+        nav_layout = QHBoxLayout(nav_host)
+        nav_layout.setContentsMargins(4, 4, 4, 4)
+        nav_layout.setSpacing(2)
+
+        self._nav_group = QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        nav_items = [
+            ("今日", 0),
+            ("专注计划", 1),
+            ("日程锁定", 2),
+            ("日历", 3),
+            ("趋势", 4),
+        ]
+        for label, idx in nav_items:
+            btn = QPushButton(label)
+            btn.setObjectName("segmentedBtn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._nav_group.addButton(btn, idx)
+            nav_layout.addWidget(btn)
+        self._nav_group.idClicked.connect(self._set_page)
+        root.addWidget(nav_host)
+
+        # ── Page stack ─────────────────────────────────────────
+        self._content_stack = QStackedWidget()
+
+        # Page 0: Today (daily goal + summary side-by-side)
+        today_page = self._build_today_page()
+        self._content_stack.addWidget(today_page)
+
+        # Page 1: Pomodoro (settings + summary)
+        pomodoro_page = self._build_pomodoro_page()
+        self._content_stack.addWidget(pomodoro_page)
+
+        # Page 2: Schedule
+        schedule_scroll = self._wrap_in_scroll(self._schedule_panel)
+        self._content_stack.addWidget(schedule_scroll)
+
+        # Page 3: Calendar
+        self._content_stack.addWidget(self._calendar_page)
+
+        # Page 4: Trend
+        self._content_stack.addWidget(self._trend_page)
+
+        root.addWidget(self._content_stack, 1)
+
+        # Select default page
+        self._nav_group.button(0).setChecked(True)
+        self._content_stack.setCurrentIndex(0)
+
+    def _wrap_in_scroll(self, widget: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+        scroll.setWidget(widget)
+        return scroll
+
+    def _build_today_page(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(20)
+
+        # Left: daily goal + report
+        left_scroll = self._wrap_in_scroll(self._daily_goal_widget)
+        layout.addWidget(left_scroll, 1)
+
+        # Right: summary panel (same as pomodoro's summary)
+        summary = self._build_summary_panel()
+        layout.addWidget(summary, 0)
+
+        return page
+
+    def _build_pomodoro_page(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(20)
 
         self._settings_panel.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
-        self._schedule_panel.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-
-        # Exclusive mode switch between a manual focus plan and scheduled lock.
-        self._mode_container = QFrame()
-        self._mode_container.setObjectName("softPanel")
-        mode_layout = QHBoxLayout(self._mode_container)
-        mode_layout.setContentsMargins(6, 4, 6, 4)
-        mode_layout.setSpacing(4)
-
-        self._btn_pomodoro_mode = QPushButton("专注计划")
-        self._btn_pomodoro_mode.setObjectName("primaryButton")
-        self._btn_pomodoro_mode.setCheckable(True)
-        self._btn_pomodoro_mode.setChecked(True)
-        self._btn_pomodoro_mode.setAccessibleName("切换到专注计划")
-
-        self._btn_schedule_mode = QPushButton("日程锁定")
-        self._btn_schedule_mode.setObjectName("ghostButton")
-        self._btn_schedule_mode.setCheckable(True)
-        self._btn_schedule_mode.setAccessibleName("切换到日程锁定")
-
-        self._mode_group = QButtonGroup(self)
-        self._mode_group.setExclusive(True)
-        self._mode_group.addButton(self._btn_pomodoro_mode, 0)
-        self._mode_group.addButton(self._btn_schedule_mode, 1)
-        self._mode_group.idClicked.connect(self._set_mode)
-        mode_layout.addWidget(self._btn_pomodoro_mode)
-        mode_layout.addWidget(self._btn_schedule_mode)
-        root.addWidget(self._mode_container)
-
-        # Content containers
-        self._content_stack_pomodoro = QWidget()
-        pomodoro_layout = QHBoxLayout(self._content_stack_pomodoro)
-        pomodoro_layout.setContentsMargins(0, 0, 0, 0)
-        pomodoro_layout.setSpacing(22)
-        pomodoro_layout.addWidget(self._settings_panel, 1)
-
-        self._content_stack_schedule = QWidget()
-        schedule_layout = QHBoxLayout(self._content_stack_schedule)
-        schedule_layout.setContentsMargins(0, 0, 0, 0)
-        schedule_layout.setSpacing(22)
-        schedule_layout.addWidget(self._schedule_panel, 1)
+        pomodoro_scroll = self._wrap_in_scroll(self._settings_panel)
+        layout.addWidget(pomodoro_scroll, 1)
 
         summary = self._build_summary_panel()
-        pomodoro_layout.addWidget(summary, 0)
+        layout.addWidget(summary, 0)
 
-        # Empty placeholder for schedule tab so summary panel is only shown in pomodoro
-        self._content_stack_schedule_layout = schedule_layout
+        return page
 
-        self._content_stack = QStackedWidget()
-        self._content_stack.addWidget(self._content_stack_pomodoro)
-        self._content_stack.addWidget(self._content_stack_schedule)
-        content.addWidget(self._content_stack, 1)
-        root.addLayout(content, 1)
+    def _set_page(self, page_id: int) -> None:
+        self._content_stack.setCurrentIndex(page_id)
+        # Refresh pages that depend on fresh data
+        if page_id == 0:
+            self._daily_goal_widget.refresh()
+        elif page_id == 3:
+            self._calendar_page.refresh()
+        elif page_id == 4:
+            self._trend_page.refresh()
 
     def _build_summary_panel(self) -> QFrame:
         panel = QFrame()
@@ -273,7 +335,7 @@ class MainWindow(QMainWindow):
         config = self._settings_panel.get_config()
         goal = (getattr(config, "goal", "") or "").strip()
         self._summary_goal.setText(goal or "先写下你要完成的事")
-        self._summary_goal.setStyleSheet("" if goal else "color:#718097;")
+        self._summary_goal.setStyleSheet("" if goal else f"color:{TEXT_TERTIARY};")
 
         self._focus_ring.set_progress(0)
         self._focus_ring.set_center_text(f"{config.duration_minutes}\n分钟")
@@ -394,29 +456,29 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _on_session_record_saved(self, record):
+        """Update daily goals, trend, calendar with the new record."""
+        completed = getattr(record, "outcome", "") == "completed"
+        terminated = getattr(record, "outcome", "") == "terminated"
+        achieved_minutes = max(0, getattr(record, "actual_focus_seconds", 0)) // 60
+        self._data_store.update_today_goal_from_session(
+            achieved_minutes, completed, terminated
+        )
+        # refresh any currently-visible pages
+        self._daily_goal_widget.refresh()
+        self._calendar_page.refresh()
+        self._trend_page.refresh()
+
     def _on_foreground_change(self, process_name: str, window_title: str):
         self._session_controller.on_foreground_change(process_name, window_title)
 
     # ------------------------------------------------------------------
-    # Mode toggle
+    # Legacy mode toggle compat — redirect to new segmented nav
     # ------------------------------------------------------------------
 
     def _set_mode(self, mode_id: int) -> None:
-        schedule_mode = mode_id == 1
-        self._btn_pomodoro_mode.setChecked(not schedule_mode)
-        self._btn_schedule_mode.setChecked(schedule_mode)
-        self._content_stack.setCurrentIndex(1 if schedule_mode else 0)
-
-        if schedule_mode:
-            self._btn_pomodoro_mode.setObjectName("ghostButton")
-            self._btn_schedule_mode.setObjectName("primaryButton")
-        else:
-            self._btn_pomodoro_mode.setObjectName("primaryButton")
-            self._btn_schedule_mode.setObjectName("ghostButton")
-        for btn in (self._btn_pomodoro_mode, self._btn_schedule_mode):
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-        self._update_summary()
+        """Legacy callback — now routes to the new page system."""
+        self._set_page(mode_id)
 
     # ------------------------------------------------------------------
     # Schedule enforcement
@@ -527,6 +589,7 @@ class MainWindow(QMainWindow):
         )
         if confirmed:
             self._session_controller.terminate()
+            self._schedule_manager.suppress_active_rule()
 
     def _on_schedule_foreground_check(self, process_name: str, _window_title: str) -> None:
         """Check foreground app against schedule rules when no manual session is active."""
@@ -541,7 +604,11 @@ class MainWindow(QMainWindow):
             rule = self._schedule_manager.active_rule
             first_app = rule.whitelisted_apps[0] if rule and rule.whitelisted_apps else process_name
             if not self._overlay_service._alive(self._overlay_service._overlay_window):
-                self._overlay_service.show_overlay(first_app, return_seconds=5)
+                self._overlay_service.show_overlay(
+                    first_app,
+                    return_seconds=5,
+                    allowed_apps=rule.whitelisted_apps if rule else None,
+                )
             self._tray.setToolTip("专注舱 · 日程锁定中")
         else:
             self._overlay_service.hide_overlay()
@@ -607,6 +674,13 @@ class MainWindow(QMainWindow):
     def _show_history(self):
         dialog = HistoryWindow(self._history_service, self)
         dialog.exec()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, '_ambient') and self._ambient is not None:
+            central = self.centralWidget()
+            if central is not None:
+                self._ambient.setGeometry(0, 0, central.width(), central.height())
 
     def _center_window(self):
         screen = QApplication.primaryScreen()

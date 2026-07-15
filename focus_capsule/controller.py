@@ -202,7 +202,8 @@ class SessionController(QObject):
                 self._status = SessionStatus.OVERLAY
                 self._overlay.show_overlay(
                     self._config.whitelist[0],
-                    return_seconds=5 if self._config.mode == "Deep" else 3
+                    return_seconds=5 if self._config.mode == "Deep" else 3,
+                    allowed_apps=list(self._config.whitelist),
                 )
             else:
                 self._status = SessionStatus.RUNNING
@@ -271,7 +272,8 @@ class SessionController(QObject):
             self._status = SessionStatus.OVERLAY
             self._overlay.show_overlay(
                 self._config.whitelist[0],
-                return_seconds=5 if mode == "Deep" else 3
+                return_seconds=5 if mode == "Deep" else 3,
+                allowed_apps=list(self._config.whitelist),
             )
         self._emit_update()
 
