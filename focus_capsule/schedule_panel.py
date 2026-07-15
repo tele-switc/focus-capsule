@@ -169,8 +169,6 @@ class SchedulePanel(QWidget):
         self._status_labels: dict[int, QLabel] = {}
         self._app_labels: dict[int, QLabel] = {}
         self._intensity_cards: dict[int, list] = {}
-        self._esc_spin: QSpinBox | None = None
-        self._dur_spin: QSpinBox | None = None
         self.setObjectName("schedulePanel")
         self.setStyleSheet(SCHEDULE_STYLESHEET)
         self._load_installed_catalog()
@@ -407,36 +405,34 @@ class SchedulePanel(QWidget):
         esc_label.setFixedWidth(36)
         settings_row.addWidget(esc_label)
 
-        self._esc_spin = QSpinBox()
-        self._esc_spin.setObjectName("compactSpin")
-        self._esc_spin.setRange(0, 10)
-        self._esc_spin.setValue(rule.max_esc if hasattr(rule, "max_esc") else 0)
-        self._esc_spin.setSuffix(" 次")
-        self._esc_spin.setMinimumWidth(72)
-        self._esc_spin.setKeyboardTracking(False)
-        self._esc_spin.setProperty("_rule_index", index)
-        self._esc_spin.setProperty("_field", "max_esc")
-        self._esc_spin.valueChanged.connect(
-            lambda _v, _idx=index: self._on_escape_changed(_idx, "max_esc")
+        esc_spin = QSpinBox()
+        esc_spin.setObjectName("compactSpin")
+        esc_spin.setRange(0, 10)
+        esc_spin.setValue(rule.max_esc if hasattr(rule, "max_esc") else 0)
+        esc_spin.setSuffix(" 次")
+        esc_spin.setMinimumWidth(72)
+        esc_spin.setKeyboardTracking(False)
+        esc_spin.valueChanged.connect(
+            lambda _v, _idx=index, _spin=esc_spin: self._on_escape_changed(_idx, "max_esc", _spin)
         )
-        settings_row.addWidget(self._esc_spin)
+        settings_row.addWidget(esc_spin)
 
         # Break duration
         dur_label = QLabel("/ ")
         dur_label.setObjectName("scheduleHint")
         settings_row.addWidget(dur_label)
 
-        self._dur_spin = QSpinBox()
-        self._dur_spin.setObjectName("compactSpin")
-        self._dur_spin.setRange(1, 15)
-        self._dur_spin.setValue(rule.esc_break_minutes if hasattr(rule, "esc_break_minutes") else 3)
-        self._dur_spin.setSuffix(" 分钟")
-        self._dur_spin.setMinimumWidth(72)
-        self._dur_spin.setKeyboardTracking(False)
-        self._dur_spin.valueChanged.connect(
-            lambda _v, _idx=index: self._on_escape_changed(_idx, "esc_break_minutes")
+        dur_spin = QSpinBox()
+        dur_spin.setObjectName("compactSpin")
+        dur_spin.setRange(1, 15)
+        dur_spin.setValue(rule.esc_break_minutes if hasattr(rule, "esc_break_minutes") else 3)
+        dur_spin.setSuffix(" 分钟")
+        dur_spin.setMinimumWidth(72)
+        dur_spin.setKeyboardTracking(False)
+        dur_spin.valueChanged.connect(
+            lambda _v, _idx=index, _spin=dur_spin: self._on_escape_changed(_idx, "esc_break_minutes", _spin)
         )
-        settings_row.addWidget(self._dur_spin)
+        settings_row.addWidget(dur_spin)
 
         settings_row.addStretch()
         layout.addLayout(settings_row)
@@ -546,16 +542,16 @@ class SchedulePanel(QWidget):
             self.save_rules()
             self.rules_changed.emit()
 
-    def _on_escape_changed(self, index: int, field: str) -> None:
+    def _on_escape_changed(self, index: int, field: str, spin: QSpinBox) -> None:
         if self._loading:
             return
         rules = self._manager.rules
         if 0 <= index < len(rules):
             rule = rules[index]
             if field == "max_esc":
-                rule.max_esc = self._esc_spin.value()
+                rule.max_esc = spin.value()
             elif field == "esc_break_minutes":
-                rule.esc_break_minutes = self._dur_spin.value()
+                rule.esc_break_minutes = spin.value()
             self._manager.update_rule(index, rule)
             self.save_rules()
             self.rules_changed.emit()
