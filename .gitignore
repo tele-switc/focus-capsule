@@ -32,3 +32,12 @@ assets/FocusCapsule.iconset/
 # Installers
 *.exe
 *.sha256
+
+
+# Build scratch dirs
+fc_flutter/
+tmp/
+android_build/
+packaging/pyinstaller_log.txt
+packaging/pyinstaller_log2.txt
+*.pyc

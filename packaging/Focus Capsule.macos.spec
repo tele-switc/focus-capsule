@@ -25,7 +25,12 @@ a = Analysis(
     pathex=[str(ROOT)],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        "urllib.request",
+        "urllib.parse",
+        "urllib.error",
+        "http.client",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
