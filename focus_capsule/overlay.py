@@ -218,7 +218,7 @@ class OverlayWindow(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(5, 9, 15, 232))
+        painter.fillRect(self.rect(), QColor(13, 14, 17, 232))
 
     def closeEvent(self, event):
         if not self._allow_close:
@@ -310,7 +310,7 @@ class BreakWindow(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor(16, 27, 42, 244))
+        painter.setBrush(QColor(13, 14, 17, 244))
         painter.setPen(QColor("#3C4D67"))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 16, 16)
 

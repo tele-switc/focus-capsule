@@ -74,15 +74,15 @@ class CalendarCell(QFrame):
 
     def _bg_color(self) -> str:
         if self._is_today:
-            return "#163a36"
+            return "#E8EBFA"
         if not self._in_month:
-            return INPUT_BG
+            return SURFACE_2
         if self._focus_minutes >= 180:
-            return "#1a473e"
+            return "#3B8D75"
         if self._focus_minutes >= 90:
-            return "#133329"
+            return "#7BB8A8"
         if self._focus_minutes > 0:
-            return "#0f2620"
+            return "#C5DDD4"
         return SURFACE_2
 
     def paintEvent(self, event):
@@ -115,7 +115,8 @@ class CalendarCell(QFrame):
                 time_text = f"{hours}h {mins}m" if mins else f"{hours}h"
             else:
                 time_text = f"{self._focus_minutes}m"
-            p.setPen(QColor(ACCENT_TEXT))
+            text_col = TEXT_PRIMARY if self._focus_minutes < 90 else "#FFFFFF"
+            p.setPen(QColor(text_col))
             f2 = QFont(p.font())
             f2.setPointSize(10)
             f2.setWeight(QFont.Weight.Medium)
@@ -221,11 +222,11 @@ class CalendarPage(QWidget):
             bar = QFrame()
             bar.setFixedSize(14, 10)
             if i >= 3:
-                color = "#1a473e"
+                color = "#3B8D75"
             elif i >= 2:
-                color = "#133329"
+                color = "#7BB8A8"
             elif i >= 1:
-                color = "#0f2620"
+                color = "#C5DDD4"
             else:
                 color = SURFACE_2
             bar.setStyleSheet(f"background:{color};border-radius:2px;border:1px solid {BORDER_SUBTLE};")

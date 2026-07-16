@@ -307,6 +307,13 @@ class MainWindow(QMainWindow):
         self._nav_group.button(1).setChecked(True)
         self._set_page(1)
 
+    def _refresh_global_style(self):
+        """Rebuild and re-apply the QSS after a theme switch (e.g. focus mode)."""
+        app = QApplication.instance()
+        if app:
+            from focus_capsule.styles import _build_stylesheet
+            app.setStyleSheet(_build_stylesheet())
+
     # ------------------------------------------------------------------
     # Config change handler (replaces old _update_summary)
     # ------------------------------------------------------------------
@@ -342,6 +349,7 @@ class MainWindow(QMainWindow):
             self._settings_panel.save_config()
 
         T.set_focused(True)
+        self._refresh_global_style()
 
         try:
             self._session_view = SessionViewWindow(config)
@@ -355,6 +363,7 @@ class MainWindow(QMainWindow):
             self.hide()
         except Exception:
             T.set_focused(False)
+            self._refresh_global_style()
             if self._session_view:
                 self._session_view.finish_and_close()
                 self._session_view = None
@@ -396,6 +405,7 @@ class MainWindow(QMainWindow):
             self._session_view = None
 
         T.set_focused(False)
+        self._refresh_global_style()
 
         # Do NOT stop the window monitor here — it needs to keep running
         # for schedule-based enforcement. Only hide the session-specific
@@ -479,6 +489,8 @@ class MainWindow(QMainWindow):
             self._session_view.finish_and_close()
             self._session_view = None
         self._overlay_service.hide_overlay()
+        T.set_focused(False)
+        self._refresh_global_style()
         self.showNormal()
         self.raise_()
         self.activateWindow()
@@ -522,6 +534,7 @@ class MainWindow(QMainWindow):
         )
 
         T.set_focused(True)
+        self._refresh_global_style()
 
         try:
             self._session_view = SessionViewWindow(config)
@@ -535,6 +548,7 @@ class MainWindow(QMainWindow):
             self.hide()
         except Exception:
             T.set_focused(False)
+            self._refresh_global_style()
             if self._session_view:
                 self._session_view.finish_and_close()
                 self._session_view = None
@@ -687,6 +701,7 @@ class MainWindow(QMainWindow):
             self._quitting = True
 
         T.set_focused(False)
+        self._refresh_global_style()
         self._window_monitor.stop()
         self._schedule_manager.stop()
         self._overlay_service.hide_overlay()
