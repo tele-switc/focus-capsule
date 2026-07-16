@@ -142,7 +142,7 @@ QSpinBox#compactSpin {
     border: 1px solid #334250;
     border-radius: 8px;
     padding: 0 10px;
-    selection-background-color: #67cfbb;
+    selection-background-color: #5B6FE8;
     selection-color: #081310;
 }
 
@@ -155,7 +155,7 @@ QSpinBox#compactSpin:hover {
 QLineEdit#goalInput:focus,
 QSpinBox#durationSpin:focus,
 QSpinBox#compactSpin:focus {
-    border: 2px solid #67cfbb;
+    border: 2px solid #5B6FE8;
 }
 
 QSpinBox#durationSpin::up-button,
@@ -189,7 +189,7 @@ QPushButton#selectedAppChip:hover {
 QPushButton#durationChip:checked,
 QPushButton#appIconTile:checked {
     background-color: #172821;
-    border: 2px solid #67cfbb;
+    border: 2px solid #5B6FE8;
     color: #e8fffa;
 }
 
@@ -206,12 +206,12 @@ QPushButton#appIconTile {
 }
 
 QPushButton#appIconTile:hover {
-    border-color: #67cfbb;
+    border-color: #5B6FE8;
     background-color: #172233;
 }
 
 QPushButton#appIconTile:checked {
-    border: 2px solid #67cfbb;
+    border: 2px solid #5B6FE8;
     background-color: #17342F;
 }
 
@@ -232,7 +232,7 @@ QLabel#appTileCheck {
     min-height: 20px;
     max-height: 20px;
     color: #071510;
-    background-color: #67cfbb;
+    background-color: #5B6FE8;
     border: 2px solid #17342f;
     border-radius: 10px;
     font-size: 12px;
@@ -269,7 +269,7 @@ QPushButton#addAppButton {
 
 QPushButton#addAppButton:hover {
     background-color: #172821;
-    border-color: #67cfbb;
+    border-color: #5B6FE8;
 }
 
 QPushButton#intensityChoice {
@@ -292,7 +292,7 @@ QPushButton#intensityChoice:hover {
 QPushButton#intensityChoice:checked {
     background-color: #172821;
     color: #e8fffa;
-    border: 2px solid #67cfbb;
+    border: 2px solid #5B6FE8;
     font-weight: bold;
 }
 

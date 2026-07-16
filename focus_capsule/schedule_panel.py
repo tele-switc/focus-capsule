@@ -74,11 +74,11 @@ QTimeEdit {
     border: 1px solid #334250;
     border-radius: 8px;
     padding: 0 8px;
-    selection-background-color: #67cfbb;
+    selection-background-color: #5B6FE8;
     selection-color: #081310;
 }
 QTimeEdit:hover { border-color: #516170; }
-QTimeEdit:focus { border: 2px solid #67cfbb; }
+QTimeEdit:focus { border: 2px solid #5B6FE8; }
 
 QFrame#ruleCard {
     background-color: #141d27;
@@ -88,7 +88,7 @@ QFrame#ruleCard {
 
 QFrame#ruleCardActive {
     background-color: #17342F;
-    border: 2px solid #67cfbb;
+    border: 2px solid #5B6FE8;
     border-radius: 10px;
 }
 
@@ -105,8 +105,8 @@ QCheckBox::indicator {
     background: #0f171f;
 }
 QCheckBox::indicator:checked {
-    background: #67cfbb;
-    border-color: #67cfbb;
+    background: #5B6FE8;
+    border-color: #5B6FE8;
 }
 
 QPushButton#addRuleButton {
@@ -120,7 +120,7 @@ QPushButton#addRuleButton {
 }
 QPushButton#addRuleButton:hover {
     background-color: #172821;
-    border-color: #67cfbb;
+    border-color: #5B6FE8;
 }
 QPushButton#editRuleApps {
     min-height: 32px;

@@ -24,12 +24,12 @@ from PyQt6.QtWidgets import QSizePolicy, QWidget
 from focus_capsule.theme import WINDOW_BG
 
 ORB_COLOURS = [
-    QColor("#67CFBB"),
-    QColor("#8EADD4"),
-    QColor("#E6B46B"),
-    QColor("#8BD6A8"),
-    QColor("#4A6FA5"),
-    QColor("#35786D"),
+    QColor("#5B6FE8"),
+    QColor("#3B8D75"),
+    QColor("#C88745"),
+    QColor("#7181F5"),
+    QColor("#9BB4FA"),
+    QColor("#B8C4F0"),
 ]
 
 

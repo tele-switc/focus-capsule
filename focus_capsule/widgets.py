@@ -13,11 +13,11 @@ class FocusRing(QWidget):
     """A calm circular progress indicator used before, during and after focus."""
 
     COLORS = {
-        "ready": QColor("#67CFBB"),
-        "running": QColor("#67CFBB"),
-        "break": QColor("#E6B46B"),
-        "complete": QColor("#8BD6A8"),
-        "stopped": QColor("#F08A8A"),
+        "ready": QColor("#5B6FE8"),
+        "running": QColor("#5B6FE8"),
+        "break": QColor("#C88745"),
+        "complete": QColor("#3B8D75"),
+        "stopped": QColor("#D85555"),
     }
 
     def __init__(self, parent=None):
@@ -58,7 +58,7 @@ class FocusRing(QWidget):
             side - 36,
         )
 
-        track_pen = QPen(QColor("#26364F"), 12)
+        track_pen = QPen(QColor("#E8E7E3"), 12)
         track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(track_pen)
         painter.drawArc(outer, 0, 360 * 16)
@@ -77,11 +77,11 @@ class FocusRing(QWidget):
             marker_x = cx + math.cos(angle) * radius
             marker_y = cy - math.sin(angle) * radius
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#F5F7FA"))
+            painter.setBrush(QColor("#17181B"))
             painter.drawEllipse(QRectF(marker_x - 3, marker_y - 3, 6, 6))
 
         text_rect = outer.adjusted(28, 48, -28, -46)
-        painter.setPen(QColor("#F5F7FA"))
+        painter.setPen(QColor("#17181B"))
         value_font = QFont(self.font())
         value_font.setPointSize(max(18, int(side * 0.095)))
         value_font.setWeight(QFont.Weight.DemiBold)
@@ -94,7 +94,7 @@ class FocusRing(QWidget):
         )
 
         caption_rect = QRectF(outer.left(), outer.center().y() + 38, outer.width(), 28)
-        painter.setPen(QColor("#93A1AF"))
+        painter.setPen(QColor("#ABAFB3"))
         caption_font = QFont(self.font())
         caption_font.setPointSize(10)
         caption_font.setWeight(QFont.Weight.Medium)
