@@ -2,6 +2,23 @@
 
 ## 参考实现
 
+- 2026-09-30 轮（补最小端到端自检 `tests/e2e_session_flow.py`）调研「跑完整流程→断言最终落盘结果→输出可机检 PASS/FAIL」的成熟做法：
+
+- yt-dlp 下载端到端测试：下载完成后一律回到磁盘取证——先 `os.path.exists(tc_filename)`、再校验体积下界、再比对 `_file_md5` 摘要，最后连旁车 `*.info.json` 也要单独断言存在，绝不拿内存里的回调结果代替文件实况。
+  来源: https://github.com/yt-dlp/yt-dlp/blob/master/test/test_download.py#L233-L254
+  文件路径:行号 → test/test_download.py:235（`self.assertTrue(os.path.exists(tc_filename), ...)`）、:241-246（体积下界）、:247-248（`md5_for_file` 严格相等）、:251-253（info.json 存在性）。原始核实: https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/test/test_download.py
+- sqlite-utils 持久化测试：所有写盘用例都把 store 指到 `tmpdir` 下的显式路径（`Database(path)`），写完立即从该路径重新读取计数断言，使每个用例互不污染、也不依赖用户真实数据目录。
+  来源: https://github.com/simonw/sqlite-utils/blob/main/tests/test_create.py#L1177-L1182
+  文件路径:行号 → tests/test_create.py:1177-1182（`def test_works_with_pathlib_path(tmpdir)` → `path = pathlib.Path(tmpdir / "test.db")` → `db = Database(path)` → `assert db.table("demo").count == 1`）。原始核实: https://raw.githubusercontent.com/simonw/sqlite-utils/main/tests/test_create.py
+- CPython 官方回归跑测器：整场测试只维护一个 `exitcode`，末尾 `sys.exit(exitcode)`，把「是否通过」压成进程退出码供 CI/脚本机检，人类可读摘要与机检信号分离。
+  来源: https://github.com/python/cpython/blob/main/Lib/test/libregrtest/main.py#L786-L815
+  文件路径:行号 → Lib/test/libregrtest/main.py:786（`def main(self, tests: TestList | None = None) -> NoReturn`）、:805（`exitcode = 0`）、:813（`exitcode = self.run_tests(selected, tests)`）、:815（`sys.exit(exitcode)`）。原始核实: https://raw.githubusercontent.com/python/cpython/main/Lib/test/libregrtest/main.py
+- pytest-qt（Qt 测试事实标准插件）`waitUntil`：驱动 Qt 事件循环直到条件成立、带总超时上限，而不是写死 `sleep` 秒数；超时即失败。
+  来源: https://github.com/pytest-dev/pytest-qt/blob/master/src/pytestqt/qtbot.py#L530-L560
+  文件路径:行号 → src/pytestqt/qtbot.py:530-532（`def waitUntil(self, callback, *, timeout: int = 5000)`）、:536-540（"Wait in a busy loop, calling the given callback periodically until timeout is reached"）。原始核实: https://raw.githubusercontent.com/pytest-dev/pytest-qt/master/src/pytestqt/qtbot.py
+
+结构选择：e2e 沿用「真实服务 + 临时目录 + 磁盘取证 + 退出码」四条——① `HistoryService(history_path=...)` / `DataStore(data_path=...)` 本就支持注入路径，照 sqlite-utils 那样把全部写盘引到 `TemporaryDirectory`，绝不碰真实 AppData/QSettings；② 断言阶段新开一个 `HistoryService`/`DataStore` 实例并重读原始 JSON（等价于进程重启），学 yt-dlp 只信磁盘实况；③ 事件等待用自写的 `_wait_until` 轮询 `QApplication.processEvents()`（同 qtbot.waitUntil 语义，零新依赖，与 NOTES 上一轮「不引入 pytest-qt」的结论一致）；④ 输出 `PASS`/`FAIL: <原因>` 单行 + `sys.exit(0/1)`，学 CPython regrtest 把结论压进退出码。会话计时按「显式驱动 QTimer 的同一个 tick 槽」来取得确定性秒数，不放宽任何相等断言。
+
 - 2026-09-30 轮（状态盘点，刷新 STATE.md）：无需调研：该轮为纯状态盘点任务，不产生任何新代码。
 
 - 2026-09-30 轮（测试真实性核验）调研 headless 跑 PyQt6 测试的成熟做法：
