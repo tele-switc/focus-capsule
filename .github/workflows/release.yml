@@ -172,12 +172,12 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          path: release-assets
           merge-multiple: true
 
       - name: 生成校验和与发布说明
         run: |
-          cd assets
+          cd release-assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -189,9 +189,9 @@ jobs:
           TAG="${INPUT_TAG:-${GITHUB_REF_NAME}}"
           echo "发布 tag: $TAG"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" assets/* --clobber
+            gh release upload "$TAG" release-assets/* --clobber
           else
-            gh release create "$TAG" assets/* \
+            gh release create "$TAG" release-assets/* \
               --title "Focus Capsule $TAG" \
               --generate-notes
           fi
