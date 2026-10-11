@@ -86,6 +86,16 @@ class TrendReport:
     category_breakdown: list[CategorySummary] = field(default_factory=list)
 
 
+@dataclass
+class StreakSummary:
+    """全量历史的连续达标与破功留痕（不受 7/30 天窗口限制）。"""
+
+    current_streak: int = 0
+    longest_streak: int = 0
+    broken_days: list[date] = field(default_factory=list)
+    today_achieved: bool = False
+
+
 class TrendService:
     """Computes trend analytics from session history."""
 
@@ -425,3 +435,93 @@ class TrendService:
             item["category"] = AFK_PROCESS
             result.append(item)
         return result
+
+    # ── 连续达标 + 破功留痕（新代码统一本地时区，读目标仍兼容 CST 键）──
+
+    def get_broke_counts_by_date(self) -> dict[date, int]:
+        """按本地日期统计破功会话数（当天每条 broke=True 记录各计 1 次）。"""
+        counts: dict[date, int] = {}
+        for r in self._history.load_history():
+            if not getattr(r, "broke", False):
+                continue
+            d = self._record_local_date(r)
+            if d is not None:
+                counts[d] = counts.get(d, 0) + 1
+        return counts
+
+    def get_streak_summary(self) -> StreakSummary:
+        """扫描全量历史计算连续达标与破功日，不受 7/30 天窗口限制。
+
+        达标日规则：
+        - AppConfig.daily_goal_enabled 为真时，取当天 daily goal 条目
+          （daily_goals.json 按 CST 日期键存储，读取方式保持兼容），
+          achieved_minutes >= target_minutes 即达标；target 为 0 或缺条目
+          时退回「当天有 completed 会话」。
+        - 目标未开启时，当天有 completed 会话即达标。
+
+        破功日（当天至少一条 broke=True）不打断连续，只在结果里单独列出。
+        current_streak 从今天往回数；今天还没过完，若今日未达标则从昨天起算，
+        是否达标由 today_achieved 单独给出。
+        """
+        broke_counts = self.get_broke_counts_by_date()
+
+        completed_by_day: dict[date, int] = {}
+        for r in self._history.load_history():
+            if r.outcome != "completed":
+                continue
+            d = self._record_local_date(r)
+            if d is not None:
+                completed_by_day[d] = completed_by_day.get(d, 0) + 1
+
+        goal_enabled = bool(self._app_config and self._app_config.daily_goal_enabled)
+        goals: dict = {}
+        if goal_enabled:
+            try:
+                goals = self._store().load_all_goals()
+            except OSError:
+                goals = {}
+
+        def achieved(d: date) -> bool:
+            if goal_enabled:
+                entry = goals.get(d.isoformat())
+                if entry is not None and entry.target_minutes > 0:
+                    return entry.achieved_minutes >= entry.target_minutes
+            return completed_by_day.get(d, 0) > 0
+
+        def _goal_day_keys() -> set[date]:
+            # 目标按 CST 日期键存储；无 completed 会话的日子也要参与达标判定
+            keys: set[date] = set()
+            for raw in goals:
+                try:
+                    keys.add(date.fromisoformat(str(raw)))
+                except (TypeError, ValueError):
+                    continue
+            return keys
+
+        all_days = sorted(
+            set(completed_by_day) | set(broke_counts) | _goal_day_keys()
+        )
+        achieved_days = {d for d in all_days if achieved(d)}
+
+        # 全量最长连续：按日排序扫描达标日
+        longest = 0
+        run = 0
+        prev: Optional[date] = None
+        for d in sorted(achieved_days):
+            run = run + 1 if prev is not None and (d - prev).days == 1 else 1
+            prev = d
+            longest = max(longest, run)
+
+        today = datetime.now().astimezone().date()
+        cursor = today if today in achieved_days else today - timedelta(days=1)
+        current = 0
+        while cursor in achieved_days:
+            current += 1
+            cursor -= timedelta(days=1)
+
+        return StreakSummary(
+            current_streak=current,
+            longest_streak=longest,
+            broken_days=sorted(broke_counts),
+            today_achieved=today in achieved_days,
+        )

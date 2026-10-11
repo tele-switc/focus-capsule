@@ -57,6 +57,7 @@ class CalendarCell(QWidget):
         self._session_count = 0
         self._goal_percent: int | None = None
         self._goal_state = "none"
+        self._broke_count = 0
         self._is_today = False
         self._is_selected = False
         self._in_month = True
@@ -80,6 +81,7 @@ class CalendarCell(QWidget):
         in_month: bool,
         is_today: bool,
         is_selected: bool,
+        broke_count: int = 0,
     ) -> None:
         self._focus_minutes = max(0, int(minutes))
         self._session_count = max(0, int(sessions))
@@ -88,6 +90,12 @@ class CalendarCell(QWidget):
         self._in_month = in_month
         self._is_today = is_today
         self._is_selected = is_selected
+        # 破功留痕：悬浮提示写明破功次数（仅本格子有破功记录时设置）
+        self._broke_count = max(0, int(broke_count))
+        if self._broke_count:
+            self.setToolTip(f"今日破功 {self._broke_count} 次")
+        else:
+            self.setToolTip("")
         self.update()
 
     def enterEvent(self, event):
@@ -201,6 +209,15 @@ class CalendarCell(QWidget):
             goal_width = (width - 16) * max(0, min(100, self._goal_percent)) / 100
             painter.drawRoundedRect(QRectF(8, height - 9, goal_width, 3), 1.5, 1.5)
 
+        if self._broke_count and self._in_month:
+            # 破功标记：格子最底部一条 DANGER 15% 透明度的 2px 细色条，
+            # 遵循淡色细线红线，不使用饱和填充；次数信息放在悬浮 tooltip
+            broke_color = QColor(current["DANGER"])
+            broke_color.setAlphaF(0.15)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(broke_color)
+            painter.drawRoundedRect(QRectF(8, height - 3, width - 16, 2), 1, 1)
+
 
 class CalendarPage(QWidget):
     """Month calendar with a detailed daily inspector."""
@@ -224,6 +241,7 @@ class CalendarPage(QWidget):
         self._selected_date: date | None = today
         self._metrics: dict[date, object] = {}
         self._goal_progress: dict[date, object] = {}
+        self._broke_counts: dict[date, int] = {}
         self._cells: dict[date, CalendarCell] = {}
         self._setup_ui()
         self.refresh()
@@ -388,6 +406,15 @@ class CalendarPage(QWidget):
             summaries = self._trend.get_day_summaries(days=400)
             self._metrics = {summary.date: summary for summary in summaries}
 
+        # 破功留痕：从趋势服务取全量历史的破功计数（服务不支持时静默降级）
+        self._broke_counts = {}
+        get_broke_counts = getattr(self._trend, "get_broke_counts_by_date", None)
+        if callable(get_broke_counts):
+            try:
+                self._broke_counts = get_broke_counts()
+            except (OSError, TypeError, ValueError):
+                self._broke_counts = {}
+
         while self._grid.count():
             item = self._grid.takeAt(0)
             if item.widget():
@@ -438,6 +465,7 @@ class CalendarPage(QWidget):
                     day.month == self._view_month,
                     day == today,
                     day == self._selected_date,
+                    broke_count=self._broke_counts.get(day, 0),
                 )
                 cell.clicked_date.connect(self._on_day_clicked)
                 # 格子整体下移一行：第 0 行留给星期表头，保证列对齐
@@ -499,6 +527,7 @@ class CalendarPage(QWidget):
                 day.month == self._view_month,
                 day == china_today(),
                 day == clicked_date,
+                broke_count=self._broke_counts.get(day, 0),
             )
         self._update_detail(clicked_date)
 

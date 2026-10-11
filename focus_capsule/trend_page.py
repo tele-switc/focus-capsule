@@ -619,7 +619,7 @@ class TrendPage(QWidget):
             daily = self._trend.get_daily_activity_seconds(start, today)
             self._day_bars.set_days(daily)
 
-        # ── 聚合摘要（总时长 / 日均 / 完成率 / 分类 Top5）──
+        # ── 聚合摘要（总时长 / 日均 / 完成率 / 连续达标 / 破功 / 分类 Top5）──
         try:
             summary = self._trend.get_range_summary(start, today)
             parts = [
@@ -627,6 +627,12 @@ class TrendPage(QWidget):
                 f"日均 {summary.avg_daily_minutes:.0f} 分",
                 f"完成率 {summary.completion_rate:.0%}",
             ]
+            # 连续达标 / 破功留痕：全量历史口径，不受当前 7/30/90… 窗口限制
+            get_streak = getattr(self._trend, "get_streak_summary", None)
+            if callable(get_streak):
+                streak = get_streak()
+                parts.append(f"连续达标 {streak.current_streak} 天")
+                parts.append(f"破功 {len(streak.broken_days)} 天")
             top5 = summary.category_top5[:5]
             if top5 and top5[0].total_focus_seconds:
                 share = self._trend.get_category_share(start, today)
