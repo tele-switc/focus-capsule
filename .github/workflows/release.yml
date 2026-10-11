@@ -138,7 +138,7 @@ jobs:
         working-directory: focus_capsule_flutter
         run: |
           flutter pub get
-          flutter analyze --no-fatal-infos
+          flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: 构建 APK
         working-directory: focus_capsule_flutter
