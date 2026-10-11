@@ -207,6 +207,10 @@ class InstalledAppPickerTests(unittest.TestCase):
             emitted.assert_called_once()
 
             saved = panel.get_config()
+            self.assertEqual(
+                saved.allowed_app_paths[process],
+                str(extra["custom_path"]),
+            )
             restored = self._new_panel(catalog)
             restored._apply_config(saved, emit=False)
             self.assertIn(process, restored._chip_widgets)
@@ -214,6 +218,32 @@ class InstalledAppPickerTests(unittest.TestCase):
             self.assertEqual(restored._display_name_for(process), extra["display_name"])
 
             restored.close()
+            panel.close()
+
+    def test_saved_onlyoffice_launcher_identity_is_migrated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            launcher = root / "DesktopEditors.exe"
+            foreground_app = root / "editors.exe"
+            launcher.write_bytes(b"")
+            foreground_app.write_bytes(b"")
+            panel = self._new_panel([])
+            config = FocusConfig(whitelist=["desktopeditors.exe"])
+            config.custom_apps = [str(launcher)]
+
+            with patch.object(
+                SettingsPanel,
+                "_validated_app_path",
+                return_value=str(foreground_app),
+            ):
+                panel._apply_config(config, emit=False)
+
+            self.assertEqual(panel.get_config().whitelist, ["editors.exe"])
+            self.assertEqual(panel.get_config().custom_apps, [str(foreground_app)])
+            self.assertEqual(
+                panel.get_config().allowed_app_paths,
+                {"editors.exe": str(foreground_app)},
+            )
             panel.close()
 
 

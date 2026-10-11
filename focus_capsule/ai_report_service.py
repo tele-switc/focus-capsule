@@ -11,15 +11,13 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-from focus_capsule.data_models import DailyReport, AppConfig
+from focus_capsule.data_models import AppConfig, DailyReport
 from focus_capsule.data_store import DataStore
 from focus_capsule.history_db import HistoryService
 from focus_capsule.models import SessionRecord
 from focus_capsule.schedule_manager import china_now
-from focus_capsule.trend_service import TrendService, DaySummary
-
+from focus_capsule.trend_service import DaySummary, TrendService
 
 CST = timezone(timedelta(hours=8), name="CST")
 
@@ -156,8 +154,8 @@ class AIReportService:
     ) -> DailyReport:
         local = self._generate_local(date_str, day, records)
         try:
-            import urllib.request
             import urllib.error
+            import urllib.request
 
             system_prompt = (
                 "你是一个专注教练。根据用户今天的专注数据写一段简短的每日总结（80-150字）。"

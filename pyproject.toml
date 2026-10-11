@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "focus-capsule"
-version = "2.0.0"
+version = "3.2.2"
 description = "专注舱 — 温柔而坚定的专注守护者，桌面专注力工具。"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }

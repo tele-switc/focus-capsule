@@ -1,310 +1,528 @@
-"""Trend analysis page — weekly / monthly focus insights.
+"""PRECISION AGENT OS — Trends as professional data terminal.
 
-Renders a custom-painted bar-chart of the last 7 days, streak stats,
-completion rate, top distractions, and category breakdown.
+Continuous line chart with area fill, crosshair, interactive tooltip.
+Selectable time ranges (7D / 30D / 90D / 6M / 1Y / ALL).
+One hero metric, one comparison line, Agent insight below.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import date, timedelta
+import math
 
-from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QColor, QPainter, QFont
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PyQt6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
 
-from focus_capsule.data_models import china_today
-from focus_capsule.trend_service import TrendService, TrendReport, DaySummary
-from focus_capsule.theme import (
-    WINDOW_BG, SURFACE_1, SURFACE_2, SURFACE_3, INPUT_BG,
-    ACCENT, WARNING, SUCCESS, DANGER, INFO,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
-    BORDER_SUBTLE, RADIUS_LG,
-    FONT_PAGE_TITLE, FONT_SECTION, FONT_AUX, FONT_META,
-    WEIGHT_TITLE, WEIGHT_SECTION,
-)
+from focus_capsule import theme as T
+from focus_capsule.trend_service import DaySummary, TrendReport, TrendService
+
+RANGE_LABELS = ["7D", "30D", "90D", "6M", "1Y", "ALL"]
+RANGE_DAYS = {"7D": 7, "30D": 30, "90D": 90, "6M": 180, "1Y": 365, "ALL": 3650}
+
+METRICS = [
+    ("focus_time", "实际专注时间", "分钟"),
+    ("completion_rate", "完成率", "%"),
+    ("session_count", "专注会话数", "轮"),
+    ("avg_session", "平均会话时长", "分钟"),
+    ("distraction", "分心次数", "次"),
+    ("unlock", "临时解锁", "次"),
+]
 
 
-class WeekBarChart(QWidget):
-    """A simple 7-day focus-time bar chart painted with QPainter."""
+class LineChartWidget(QWidget):
+    """Continuous line chart with area fill, crosshair, tooltip."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._summaries: list[DaySummary] = []
-        self.setMinimumHeight(200)
+        self._metric_idx = 0
+        self._show_comparison = False
+        self._hover_x = -1
+        self._hover_y = -1
+        self.setMinimumHeight(280)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
+        self._target_line: float | None = None
+        self._avg_line: float | None = None
 
-    def set_data(self, summaries: list[DaySummary]):
+    def set_data(self, summaries: list[DaySummary], metric_idx: int = 0):
         self._summaries = summaries
+        self._metric_idx = metric_idx
+        self._hover_x = -1
+        self.update()
+
+    def set_ref_lines(self, target: float | None = None, avg: float | None = None):
+        self._target_line = target
+        self._avg_line = avg
+        self.update()
+
+    def _get_metric_value(self, s: DaySummary) -> float:
+        if self._metric_idx == 0:
+            return s.focus_minutes
+        if self._metric_idx == 1:
+            return s.completion_rate * 100
+        if self._metric_idx == 2:
+            return s.session_count
+        if self._metric_idx == 3:
+            return s.focus_minutes / max(1, s.session_count) if s.session_count else 0
+        if self._metric_idx == 4:
+            return getattr(s, "distraction_count", 0)
+        if self._metric_idx == 5:
+            return getattr(s, "unlock_count", 0)
+        return 0
+
+    def _metric_label(self, val: float) -> str:
+        key, name, unit = METRICS[self._metric_idx]
+        if unit == "%":
+            return f"{val:.0f}{unit}"
+        if unit == "分钟":
+            if val >= 60:
+                return f"{int(val // 60)}h{int(val % 60)}m" if val % 60 else f"{int(val // 60)}h"
+            return f"{int(val)}m"
+        return f"{int(val)}{unit}"
+
+    def mouseMoveEvent(self, event):
+        self._hover_x = event.position().x()
+        self._hover_y = event.position().y()
+        self.update()
+
+    def leaveEvent(self, event):
+        self._hover_x = -1
+        self._hover_y = -1
         self.update()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        t = T.current()
         w, h = self.width(), self.height()
 
-        if not self._summaries:
-            p.setPen(QColor(TEXT_TERTIARY))
+        if not self._summaries or len(self._summaries) < 2:
+            p.setPen(QColor(t["TEXT_TERTIARY"]))
             f = QFont(p.font())
-            f.setPointSize(12)
+            f.setPointSize(13)
             p.setFont(f)
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                       "还没有专注数据\n完成一轮专注后这里会显示你的趋势")
+                       "还没有足够的专注数据进行趋势分析")
             return
 
-        padding_l = 36
-        padding_r = 16
-        padding_t = 28
-        padding_b = 28
-        chart_w = w - padding_l - padding_r
-        chart_h = h - padding_t - padding_b
+        pad_l, pad_r, pad_t, pad_b = 44, 16, 16, 28
+        chart_w = w - pad_l - pad_r
+        chart_h = h - pad_t - pad_b
 
-        max_minutes = max(s.focus_minutes for s in self._summaries) or 1
-        # round up to nearest 30
-        max_minutes = ((max_minutes + 29) // 30) * 30
+        values = [self._get_metric_value(s) for s in self._summaries]
+        max_val = max(values) if values else 1
+        if max_val == 0:
+            max_val = 1
+        # Round up for nice gridlines
+        if max_val > 10:
+            max_val = math.ceil(max_val / 10) * 10
+        else:
+            max_val = max(1, math.ceil(max_val))
 
-        # Grid lines
-        p.setPen(QPen(QColor(BORDER_SUBTLE)))
-        grid_pen = QColor(BORDER_SUBTLE)
-        for i in range(4):
-            y = padding_t + chart_h * i / 3
-            grid_pen.setAlpha(40)
-            p.setPen(grid_pen)
-            p.drawLine(int(padding_l), int(y), int(w - padding_r), int(y))
-            val = max_minutes * (1 - i / 3)
-            p.setPen(QColor(TEXT_TERTIARY))
-            f_grid = QFont(p.font())
-            f_grid.setPointSize(9)
-            p.setFont(f_grid)
-            label = f"{int(val)}m"
-            p.drawText(
-                0, int(y - 7), padding_l - 2, 14,
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                label,
-            )
+        # Horizontal grid lines + Y labels
+        grid_pen = QColor(t["CHART_GRID"])
+        p.setPen(QPen(grid_pen, 1))
+        for i in range(5):
+            y = pad_t + chart_h * i / 4
+            p.drawLine(int(pad_l), int(y), int(w - pad_r), int(y))
+            val = max_val * (1 - i / 4)
+            p.setPen(QColor(t["CHART_TEXT"]))
+            gf = QFont(p.font())
+            gf.setPointSize(9)
+            gf.setWeight(QFont.Weight.Normal)
+            p.setFont(gf)
+            p.drawText(QRectF(0, y - 7, pad_l - 4, 14),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       self._metric_label(val))
+            p.setPen(QPen(grid_pen, 1))
 
-        # Bars
-        bar_w = chart_w / len(self._summaries) - 8
-        today = china_today()
+        # Area fill + line path
+        n = len(self._summaries)
+        pts = []
+        for i, val in enumerate(values):
+            x = pad_l + chart_w * i / (n - 1) if n > 1 else pad_l
+            y = pad_t + chart_h * (1 - val / max_val)
+            pts.append((x, y))
 
-        for i, s in enumerate(self._summaries):
-            bar_x = padding_l + i * (bar_w + 8) + 4
-            bar_h = (s.focus_minutes / max(max_minutes, 1)) * chart_h if s.focus_minutes else 0
-            bar_y = padding_t + chart_h - bar_h
+        # Area fill
+        fill_path = QPainterPath()
+        fill_path.moveTo(pts[0][0], pad_t + chart_h)
+        for x, y in pts:
+            fill_path.lineTo(x, y)
+        fill_path.lineTo(pts[-1][0], pad_t + chart_h)
+        fill_path.closeSubpath()
+        gradient = QLinearGradient(0, pad_t, 0, pad_t + chart_h)
+        fill_top = QColor(t["CHART_FILL"])
+        fill_top.setAlphaF(0.72)
+        fill_bottom = QColor(t["CHART_FILL"])
+        fill_bottom.setAlphaF(0.08)
+        gradient.setColorAt(0, fill_top)
+        gradient.setColorAt(1, fill_bottom)
+        p.fillPath(fill_path, QBrush(gradient))
 
-            is_today = s.date == today
-            is_weekend = s.date.weekday() >= 5
+        # Line
+        line_path = QPainterPath()
+        line_path.moveTo(pts[0][0], pts[0][1])
+        for x, y in pts[1:]:
+            line_path.lineTo(x, y)
+        line_pen = QPen(QColor(t["CHART_PRIMARY"]), 2)
+        line_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        line_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(line_pen)
+        p.drawPath(line_path)
 
-            if is_today:
-                color = QColor(ACCENT)
-            elif is_weekend:
-                color = QColor(WARNING)
-            else:
-                color = QColor(INFO)
+        # Reference lines — target
+        if self._target_line and self._target_line > 0 and self._target_line <= max_val:
+            ty = pad_t + chart_h * (1 - self._target_line / max_val)
+            ref_pen = QPen(QColor(t["CHART_SECONDARY"]), 1, Qt.PenStyle.DashLine)
+            p.setPen(ref_pen)
+            p.drawLine(int(pad_l), int(ty), int(w - pad_r), int(ty))
+            p.setPen(QColor(t["CHART_SECONDARY"]))
+            rf = QFont(p.font())
+            rf.setPointSize(9)
+            p.setFont(rf)
+            p.drawText(QRectF(w - pad_r - 60, ty - 14, 56, 12),
+                       Qt.AlignmentFlag.AlignRight, "目标")
 
-            if bar_h > 0:
-                p.setBrush(color)
-            else:
-                # Empty days: faint indicator
-                color.setAlpha(50)
-                p.setBrush(color)
-                bar_h = 2
-                bar_y = padding_t + chart_h - bar_h
+        # Reference line — average
+        if self._avg_line and self._avg_line > 0 and self._avg_line <= max_val:
+            ay = pad_t + chart_h * (1 - self._avg_line / max_val)
+            avg_pen = QPen(QColor(t["CHART_TERTIARY"]), 1, Qt.PenStyle.DashLine)
+            p.setPen(avg_pen)
+            p.drawLine(int(pad_l), int(ay), int(w - pad_r), int(ay))
+            p.setPen(QColor(t["CHART_TERTIARY"]))
+            af = QFont(p.font())
+            af.setPointSize(9)
+            p.setFont(af)
+            p.drawText(QRectF(w - pad_r - 60, ay + 2, 56, 12),
+                       Qt.AlignmentFlag.AlignRight, "平均")
 
+        # X labels — sparse
+        p.setPen(QColor(t["CHART_TEXT"]))
+        xf = QFont(p.font())
+        xf.setPointSize(9)
+        xf.setWeight(QFont.Weight.Normal)
+        p.setFont(xf)
+        label_step = max(1, n // 7)
+        for i in range(0, n, label_step):
+            s = self._summaries[i]
+            x = pad_l + chart_w * i / (n - 1) if n > 1 else pad_l
+            lbl = f"{s.date.month}/{s.date.day}"
+            p.drawText(QRectF(x - 20, pad_t + chart_h + 4, 40, 16),
+                       Qt.AlignmentFlag.AlignCenter, lbl)
+
+        # Crosshair + tooltip
+        if self._hover_x >= pad_l and self._hover_x <= w - pad_r:
+            # Find nearest data point
+            best_i = 0
+            best_dist = float("inf")
+            for i, (x, y) in enumerate(pts):
+                d = abs(x - self._hover_x)
+                if d < best_dist:
+                    best_dist = d
+                    best_i = i
+            cx, cy = pts[best_i]
+
+            # Crosshair
+            cross_pen = QPen(QColor(t["CHART_CROSSHAIR"]), 1)
+            cross_pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(cross_pen)
+            p.drawLine(int(cx), int(pad_t), int(cx), int(pad_t + chart_h))
+            p.drawLine(int(pad_l), int(cy), int(w - pad_r), int(cy))
+
+            # Point
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 4, 4)
+            p.setBrush(QColor(t["CHART_PRIMARY"]))
+            p.drawEllipse(QRectF(cx - 4, cy - 4, 8, 8))
+            p.setBrush(QColor(t["SURFACE_2"]))
+            p.drawEllipse(QRectF(cx - 2.5, cy - 2.5, 5, 5))
 
-            # Day label
-            p.setPen(QColor(TEXT_SECONDARY if is_today else TEXT_TERTIARY))
-            f_label = QFont(p.font())
-            f_label.setPointSize(9)
-            if is_today:
-                f_label.setWeight(QFont.Weight.Bold)
-            p.setFont(f_label)
-            day_label = f"{s.date.month}/{s.date.day}"
-            p.drawText(
-                int(bar_x - 4), int(padding_t + chart_h + 4),
-                int(bar_w + 8), 20,
-                Qt.AlignmentFlag.AlignCenter,
-                day_label,
-            )
+            # Tooltip
+            s = self._summaries[best_i]
+            val = self._get_metric_value(s)
+            tip_text = f"{s.date.month}/{s.date.day}  {self._metric_label(val)}"
+            tip_rect = p.fontMetrics().boundingRect(tip_text)
+            tip_w = tip_rect.width() + 16
+            tip_h = tip_rect.height() + 8
+            tip_x = min(cx + 10, w - tip_w - 4)
+            tip_y = max(cy - tip_h - 6, pad_t + 2)
 
-            # Minutes on top of bar
-            if s.focus_minutes > 0 and bar_h > 20:
-                p.setPen(QColor(TEXT_PRIMARY))
-                f_val = QFont(p.font())
-                f_val.setPointSize(9)
-                f_val.setWeight(QFont.Weight.Medium)
-                p.setFont(f_val)
-                if s.focus_minutes >= 60:
-                    hours = s.focus_minutes // 60
-                    mins = s.focus_minutes % 60
-                    val_text = f"{hours}h{mins}m" if mins else f"{hours}h"
-                else:
-                    val_text = f"{s.focus_minutes}m"
-                p.drawText(
-                    int(bar_x - 4), int(bar_y - 18),
-                    int(bar_w + 8), 16,
-                    Qt.AlignmentFlag.AlignCenter,
-                    val_text,
-                )
-
-from PyQt6.QtGui import QPen
+            p.setBrush(QColor(t["SURFACE_2"]))
+            p.setPen(QPen(QColor(t["TEXT_TERTIARY"]), 1))
+            p.drawRoundedRect(QRectF(tip_x, tip_y, tip_w, tip_h), 6, 6)
+            p.setPen(QColor(t["TEXT_PRIMARY"]))
+            tf = QFont(p.font())
+            tf.setPointSize(10)
+            tf.setWeight(QFont.Weight.Medium)
+            p.setFont(tf)
+            p.drawText(QRectF(tip_x + 8, tip_y, tip_w - 16, tip_h),
+                       Qt.AlignmentFlag.AlignVCenter, tip_text)
 
 
 class TrendPage(QWidget):
-    """Trend analysis page with bar chart, stats, and category breakdown."""
+    """Professional data terminal for focus analytics."""
 
     def __init__(self, trend_service: TrendService, parent=None):
         super().__init__(parent)
         self._trend = trend_service
+        self._range_idx = 0
+        self._metric_idx = 0
         self._setup_ui()
         self.refresh()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(16)
 
-        # Header
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        title = QLabel("趋势")
-        title.setObjectName("pageTitle")
-        header.addWidget(title)
-        header.addStretch()
-        self._range_label = QLabel("最近 7 天")
-        self._range_label.setObjectName("subtitle")
-        header.addWidget(self._range_label)
-        layout.addLayout(header)
+        # ── Time range segmented control ───────────────────────
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(0)
 
-        subtitle = QLabel("追踪专注模式，发现可以改进的地方")
-        subtitle.setObjectName("subtitle")
-        layout.addWidget(subtitle)
+        # Range selector
+        range_seg = QFrame()
+        range_seg.setObjectName("segmentedControl")
+        range_layout = QHBoxLayout(range_seg)
+        range_layout.setContentsMargins(2, 2, 2, 2)
+        range_layout.setSpacing(0)
+        self._range_btns = []
+        for i, label in enumerate(RANGE_LABELS):
+            btn = QPushButton(label)
+            btn.setObjectName("segmentedBtn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            if i == 0:
+                btn.setChecked(True)
+            btn.clicked.connect(lambda checked, idx=i: self._set_range(idx))
+            range_layout.addWidget(btn)
+            self._range_btns.append(btn)
+        controls_row.addWidget(range_seg)
+        controls_row.addSpacing(16)
 
-        # Stats cards row
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(12)
-        self._stat_total = self._stat_card(stats_row, "0m", "总专注时间")
-        self._stat_avg = self._stat_card(stats_row, "0m", "日均")
-        self._stat_streak = self._stat_card(stats_row, "0 天", "连续完成")
-        self._stat_rate = self._stat_card(stats_row, "0%", "完成率")
-        layout.addLayout(stats_row)
+        # Metric selector
+        metric_seg = QFrame()
+        metric_seg.setObjectName("segmentedControl")
+        metric_layout = QHBoxLayout(metric_seg)
+        metric_layout.setContentsMargins(2, 2, 2, 2)
+        metric_layout.setSpacing(0)
+        self._metric_btns = []
+        for i, (key, name, unit) in enumerate(METRICS):
+            btn = QPushButton(name)
+            btn.setObjectName("segmentedBtn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            if i == 0:
+                btn.setChecked(True)
+            btn.clicked.connect(lambda checked, idx=i: self._set_metric(idx))
+            metric_layout.addWidget(btn)
+            self._metric_btns.append(btn)
+        controls_row.addWidget(metric_seg, 1)
+        controls_row.addStretch()
+        layout.addLayout(controls_row)
 
-        # Bar chart
-        chart_frame = QFrame()
-        chart_frame.setObjectName("panel")
-        chart_layout = QVBoxLayout(chart_frame)
-        chart_layout.setContentsMargins(18, 14, 18, 14)
-        chart_layout.setSpacing(10)
-        chart_title = QLabel("每日专注时间")
-        chart_title.setObjectName("sectionTitle")
-        chart_layout.addWidget(chart_title)
-        self._chart = WeekBarChart()
-        chart_layout.addWidget(self._chart)
-        layout.addWidget(chart_frame, 1)
+        # ── Hero metric + line chart ─────────────────────────────
+        chart_panel = QFrame()
+        chart_panel.setObjectName("sectionCard")
+        chart_panel_layout = QVBoxLayout(chart_panel)
+        chart_panel_layout.setContentsMargins(24, 22, 24, 20)
+        chart_panel_layout.setSpacing(0)
+        chart_layout = QHBoxLayout()
+        chart_layout.setSpacing(24)
 
-        # Category breakdown
-        cat_frame = QFrame()
-        cat_frame.setObjectName("panel")
-        cat_layout = QVBoxLayout(cat_frame)
-        cat_layout.setContentsMargins(18, 14, 18, 14)
-        cat_layout.setSpacing(10)
-        cat_title = QLabel("分类统计")
-        cat_title.setObjectName("sectionTitle")
-        cat_layout.addWidget(cat_title)
-        self._cat_container = QVBoxLayout()
-        self._cat_container.setSpacing(6)
-        cat_layout.addLayout(self._cat_container)
-        layout.addWidget(cat_frame)
+        # Left: hero metric column
+        hero_col = QVBoxLayout()
+        hero_col.setSpacing(4)
+        hero_col.setContentsMargins(0, 8, 0, 0)
+
+        _, metric_name, _ = METRICS[self._metric_idx]
+        self._hero_label = QLabel(metric_name)
+        self._hero_label.setStyleSheet(
+            f"color:{T.get('TEXT_TERTIARY')}; font-size:12px; font-weight:{T.WEIGHT_BODY};"
+            f" letter-spacing:0.5px;"
+        )
+        hero_col.addWidget(self._hero_label)
+
+        self._hero_value = QLabel("—")
+        self._hero_value.setStyleSheet(
+            f"color:{T.get('TEXT_PRIMARY')}; font-size:{T.FONT_HERO}px;"
+            f" font-weight:{T.WEIGHT_MEDIUM}; font-family:{T.FONT_FAMILY_NUM};"
+            f" letter-spacing:-1.5px;"
+        )
+        hero_col.addWidget(self._hero_value)
+
+        self._hero_sub = QLabel("")
+        self._hero_sub.setStyleSheet(
+            f"color:{T.get('TEXT_SECONDARY')}; font-size:13px; font-weight:{T.WEIGHT_BODY};"
+        )
+        hero_col.addWidget(self._hero_sub)
+
+        hero_col.addSpacing(12)
+
+        # Compact summary stats (no cards)
+        self._stat_total = self._compact_stat(hero_col, "总专注", "—")
+        self._stat_avg = self._compact_stat(hero_col, "日均", "—")
+        self._stat_streak = self._compact_stat(hero_col, "连续完成", "—")
+
+        hero_col.addStretch()
+        chart_layout.addLayout(hero_col, 1)
+
+        # Right: line chart
+        self._chart = LineChartWidget()
+        chart_layout.addWidget(self._chart, 3)
+
+        chart_panel_layout.addLayout(chart_layout)
+        layout.addWidget(chart_panel, 1)
+
+        # ── Agent insight ────────────────────────────────────────
+        insight_card = QFrame()
+        insight_card.setObjectName("sectionCard")
+        insight_col = QVBoxLayout(insight_card)
+        insight_col.setContentsMargins(20, 14, 20, 14)
+        insight_col.setSpacing(4)
+
+        insight_key = QLabel("专注洞察")
+        insight_key.setObjectName("eyebrow")
+        insight_col.addWidget(insight_key)
+
+        self._insight_text = QLabel("加载数据中…")
+        self._insight_text.setObjectName("insightText")
+        self._insight_text.setWordWrap(True)
+        self._insight_text.setStyleSheet(
+            f"color:{T.get('TEXT_SECONDARY')}; font-size:15px; line-height:1.6;"
+        )
+        insight_col.addWidget(self._insight_text)
+        layout.addWidget(insight_card)
 
     @staticmethod
-    def _stat_card(layout: QHBoxLayout, value: str, caption: str) -> QLabel:
-        card = QFrame()
-        card.setObjectName("statCard")
-        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        card.setMinimumHeight(64)
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(14, 10, 14, 10)
-        cl.setSpacing(2)
-        val_label = QLabel(value)
-        val_label.setObjectName("statValue")
-        val_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        cap_label = QLabel(caption)
-        cap_label.setObjectName("statCaption")
-        cap_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        cl.addWidget(val_label)
-        cl.addWidget(cap_label)
-        layout.addWidget(card)
-        return val_label
+    def _compact_stat(layout: QVBoxLayout, label: str, value: str) -> QLabel:
+        row = QHBoxLayout()
+        row.setSpacing(0)
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            f"color:{T.get('TEXT_TERTIARY')}; font-size:12px; font-weight:{T.WEIGHT_BODY};"
+        )
+        lbl.setFixedWidth(60)
+        val = QLabel(value)
+        val.setStyleSheet(
+            f"color:{T.get('TEXT_PRIMARY')}; font-size:15px; font-weight:{T.WEIGHT_SECTION};"
+            f" font-family:{T.FONT_FAMILY_NUM};"
+        )
+        row.addWidget(lbl)
+        row.addWidget(val)
+        layout.addLayout(row)
+        return val
+
+    def _set_range(self, idx: int):
+        self._range_idx = idx
+        for i, btn in enumerate(self._range_btns):
+            btn.setChecked(i == idx)
+        self.refresh()
+
+    def _set_metric(self, idx: int):
+        self._metric_idx = idx
+        for i, btn in enumerate(self._metric_btns):
+            btn.setChecked(i == idx)
+        _, name, _ = METRICS[idx]
+        self._hero_label.setText(name)
+        self.refresh()
 
     def refresh(self):
-        report = self._trend.get_trend(days=7)
-        self._chart.set_data(report.days)
+        days = RANGE_DAYS.get(RANGE_LABELS[self._range_idx], 7)
+        report = self._trend.get_trend(days=days)
+        self._chart.set_data(report.days, self._metric_idx)
 
-        # Stats
-        total = report.total_focus_seconds
-        hours = total // 3600
-        mins = (total % 3600) // 60
-        self._stat_total.setText(
-            f"{hours}h {mins}m" if hours else f"{mins}m"
-        )
-        self._stat_avg.setText(f"{report.avg_daily_minutes:.0f}m")
-        self._stat_streak.setText(f"{report.current_streak} 天")
-        rate = sum(s.completion_rate for s in report.days) / max(1, len(report.days))
-        self._stat_rate.setText(f"{rate:.0%}")
+        # Hero metric
+        key, name, unit = METRICS[self._metric_idx]
+        if key == "focus_time":
+            total = report.total_focus_seconds
+            hours = total // 3600
+            mins = (total % 3600) // 60
+            self._hero_value.setText(
+                f"{hours}h{mins}m" if hours else f"{mins}m"
+            )
+            self._hero_sub.setText(f"近 {days} 天累计")
+            self._stat_total.setText(f"{hours}h{mins}m" if hours else f"{mins}m")
+            self._stat_avg.setText(f"{report.avg_daily_minutes:.0f}m")
+            self._stat_streak.setText(f"{report.current_streak}天")
 
-        # Category breakdown
-        self._clear_layout(self._cat_container)
-        if not report.category_breakdown:
-            empty = QLabel("还没有分类数据")
-            empty.setObjectName("hint")
-            self._cat_container.addWidget(empty)
+            # Reference lines
+            avg = report.avg_daily_minutes
+            target = getattr(report, "daily_goal", None)
+            self._chart.set_ref_lines(target=target, avg=avg)
+
+            # Agent insight
+            self._generate_insight(report)
+
+        elif key == "completion_rate":
+            rate = sum(s.completion_rate for s in report.days) / max(1, len(report.days))
+            self._hero_value.setText(f"{rate:.0%}")
+            self._hero_sub.setText(f"近 {days} 天平均")
+            self._chart.set_ref_lines(target=1.0, avg=None)
+            self._insight_text.setText("完成率反映专注会话达成预期的比例。")
+
         else:
-            max_secs = max(c.total_focus_seconds for c in report.category_breakdown) or 1
-            for cat in report.category_breakdown[:8]:
-                row = QHBoxLayout()
-                row.setSpacing(10)
-                cat_name = QLabel(cat.category)
-                cat_name.setObjectName("summaryValue")
-                cat_name.setFixedWidth(80)
-                row.addWidget(cat_name)
+            self._hero_value.setText("—")
+            self._hero_sub.setText(f"近 {days} 天")
+            self._chart.set_ref_lines()
+            self._insight_text.setText("")
 
-                # Progress bar
-                bar_bg = QFrame()
-                bar_bg.setStyleSheet(
-                    f"background:{INPUT_BG};border-radius:3px;max-height:6px;"
-                )
-                bar_bg.setFixedHeight(8)
-                bar_layout = QHBoxLayout(bar_bg)
-                bar_layout.setContentsMargins(0, 0, 0, 0)
-                bar_layout.setSpacing(0)
-                fill = QFrame()
-                pct = int((cat.total_focus_seconds / max_secs) * 100)
-                fill.setFixedHeight(6)
-                fill.setStyleSheet(f"background:{ACCENT};border-radius:3px;min-width:{pct}%;")
-                bar_layout.addWidget(fill)
-                bar_layout.addStretch()
-                row.addWidget(bar_bg, 1)
+    def _generate_insight(self, report: TrendReport):
+        if not report.days:
+            self._insight_text.setText("暂无足够数据生成洞察。")
+            return
 
-                mins = cat.total_focus_seconds // 60
-                time_text = f"{mins}m" if mins < 60 else f"{mins // 60}h {mins % 60}m"
-                time_label = QLabel(time_text)
-                time_label.setObjectName("hint")
-                time_label.setFixedWidth(60)
-                time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-                row.addWidget(time_label)
+        total = report.total_focus_seconds
+        avg = report.avg_daily_minutes
+        streak = report.current_streak
 
-                self._cat_container.addLayout(row)
+        # Analyse volatility
+        vals = [s.focus_minutes for s in report.days]
+        if len(vals) > 1:
+            mean = sum(vals) / len(vals)
+            variance = sum((v - mean) ** 2 for v in vals) / len(vals)
+            stddev = math.sqrt(variance)
+            cv = stddev / mean if mean > 0 else 0
+        else:
+            cv = 0
 
-    @staticmethod
-    def _clear_layout(layout):
-        while layout.count():
-            item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                TrendPage._clear_layout(item.layout())
+        # Find best and worst days
+        if vals:
+            best_idx = vals.index(max(vals))
+            worst_idx = vals.index(min(vals))
+            best_day = report.days[best_idx]
+            worst_day = report.days[worst_idx]
+        else:
+            best_day = worst_day = None
+
+        parts = []
+        parts.append(f"近 {len(report.days)} 天总专注 {int(total // 60)} 分钟，日均 {avg:.0f} 分钟。")
+        if streak > 0:
+            parts.append(f"已连续 {streak} 天完成目标。")
+        if cv > 0.5 and avg > 0:
+            parts.append("波动较大，建议保持更规律的开始时间。")
+        else:
+            parts.append("数据稳定，专注节奏良好。")
+        if best_day and worst_day and best_day.focus_minutes > 0:
+            parts.append(
+                f"最佳日 {best_day.date.month}/{best_day.date.day} 完成 "
+                f"{best_day.focus_minutes} 分钟。"
+            )
+
+        self._insight_text.setText(" ".join(parts))

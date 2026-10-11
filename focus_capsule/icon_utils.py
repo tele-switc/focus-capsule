@@ -335,6 +335,11 @@ def _find_exe_path(process_name: str) -> str | None:
             os.path.expandvars(r"%LOCALAPPDATA%\Programs\IntelliJ IDEA\bin\idea64.exe"),
             r"C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe",
         ],
+        "anki.exe": [
+            os.path.expandvars(r"%LOCALAPPDATA%\Anki\anki.exe"),
+            r"C:\Program Files\Anki\anki.exe",
+            r"C:\Program Files (x86)\Anki\anki.exe",
+        ],
     }
 
     for path in special.get(base, []):
@@ -838,7 +843,13 @@ _PROGRAM_SEARCH_CHAINS = (
     ("application", "current"),
     ("main", "current"),
 )
-_LAUNCHER_EXECUTABLE_AFFIXES = ("launcher", "start")
+_LAUNCHER_EXECUTABLE_AFFIXES = (
+    "bootstrap",
+    "desktop",
+    "launcher",
+    "start",
+    "starter",
+)
 _BLOCKED_PROGRAM_DIRECTORY_NAMES = {
     "amd",
     "common files",
@@ -1147,6 +1158,15 @@ def _resolve_windows_catalog_executable(
     allow_system_path: bool = False,
 ) -> Path | None:
     """Return a real GUI executable with foreground-monitor-compatible identity."""
+    foreground = _resolve_launcher_foreground_executable(
+        executable,
+        display_hint,
+        process_hint,
+        allow_console=trusted_source,
+        allow_system_path=allow_system_path,
+    )
+    if foreground is not None:
+        executable = foreground
     process_name = executable.name.casefold()
     if not _is_catalog_component(
         display_hint,

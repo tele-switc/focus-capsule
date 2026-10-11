@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Iterable
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from focus_capsule import theme as T
 from focus_capsule.icon_utils import (
     app_pixmap,
     discover_installed_apps,
@@ -85,238 +87,240 @@ MIN_FOCUS_MINUTES = 1
 MAX_FOCUS_MINUTES = (2**31 - 1) // 60
 
 
-PANEL_STYLESHEET = """
+PANEL_STYLESHEET = f"""
 QWidget#settingsPanel,
 QWidget#settingsContent,
 QScrollArea#settingsScroll,
-QScrollArea#settingsScroll > QWidget > QWidget {
+QScrollArea#settingsScroll > QWidget > QWidget {{
     background: transparent;
-}
+}}
 
-QScrollArea#settingsScroll {
+QScrollArea#settingsScroll {{
     border: none;
-}
+}}
 
-QLabel#settingsTitle {
-    color: #f3f6f7;
+QLabel#settingsTitle {{
+    color: {T.get("TEXT_PRIMARY")};
     font-size: 22px;
-    font-weight: bold;
-}
+    font-weight: 600;
+    letter-spacing: -0.3px;
+}}
 
-QLabel#settingsSubtitle {
-    color: #93a1af;
-    font-size: 12px;
-}
-
-QFrame#settingsSection {
-    background-color: #141d27;
-    border: 1px solid #26323e;
-    border-radius: 12px;
-}
-
-QLabel#sectionTitle {
-    color: #eef3f4;
+QLabel#settingsSubtitle {{
+    color: {T.get("TEXT_SECONDARY")};
     font-size: 14px;
-    font-weight: bold;
-}
+    font-weight: 400;
+}}
+
+QFrame#settingsSection {{
+    background-color: {T.get("SURFACE_1")};
+    border: 1px solid {T.get("BORDER_SUBTLE")};
+    border-radius: 14px;
+}}
+
+QLabel#sectionTitle {{
+    color: {T.get("TEXT_PRIMARY")};
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.1px;
+}}
 
 QLabel#sectionHint,
 QLabel#fieldHint,
-QLabel#selectedEmpty {
-    color: #93a1af;
-    font-size: 11px;
-}
+QLabel#selectedEmpty {{
+    color: {T.get("TEXT_SECONDARY")};
+    font-size: 13px;
+    font-weight: 400;
+}}
 
-QLabel#selectedSummary {
-    color: #cbd5da;
-    font-size: 12px;
-    font-weight: bold;
-}
+QLabel#selectedSummary {{
+    color: {T.get("TEXT_TERTIARY")};
+    font-size: 13px;
+    font-weight: 500;
+}}
 
 QLineEdit#goalInput,
 QSpinBox#durationSpin,
-QSpinBox#compactSpin {
+QSpinBox#compactSpin {{
     min-height: 38px;
-    background-color: #0f171f;
-    color: #f3f6f7;
-    border: 1px solid #334250;
+    background-color: {T.get("INPUT_BG")};
+    color: {T.get("TEXT_PRIMARY")};
+    border: 1px solid {T.get("BORDER_NORMAL")};
     border-radius: 8px;
-    padding: 0 10px;
-    selection-background-color: #5B6FE8;
-    selection-color: #081310;
-}
+    padding: 0 12px;
+    selection-background-color: {T.get("ACCENT_MUTED")};
+}}
 
 QLineEdit#goalInput:hover,
 QSpinBox#durationSpin:hover,
-QSpinBox#compactSpin:hover {
-    border-color: #516170;
-}
+QSpinBox#compactSpin:hover {{
+    border-color: {T.get("BORDER_STRONG")};
+}}
 
 QLineEdit#goalInput:focus,
 QSpinBox#durationSpin:focus,
-QSpinBox#compactSpin:focus {
-    border: 2px solid #5B6FE8;
-}
+QSpinBox#compactSpin:focus {{
+    border: 2px solid {T.get("ACCENT")};
+}}
 
 QSpinBox#durationSpin::up-button,
 QSpinBox#durationSpin::down-button,
 QSpinBox#compactSpin::up-button,
-QSpinBox#compactSpin::down-button {
+QSpinBox#compactSpin::down-button {{
     width: 18px;
     border: none;
     background: transparent;
-}
+}}
 
 QPushButton#durationChip,
 QPushButton#appIconTile,
-QPushButton#selectedAppChip {
+QPushButton#selectedAppChip {{
     min-height: 38px;
-    background-color: #192532;
-    color: #cbd5da;
-    border: 1px solid #334250;
+    background-color: {T.get("INPUT_BG")};
+    color: {T.get("TEXT_SECONDARY")};
+    border: 1px solid {T.get("BORDER_NORMAL")};
     border-radius: 12px;
     padding: 0 15px;
-}
+}}
 
 QPushButton#durationChip:hover,
 QPushButton#appIconTile:hover,
-QPushButton#selectedAppChip:hover {
-    background-color: #21303d;
-    border-color: #536574;
-    color: #f3f6f7;
-}
+QPushButton#selectedAppChip:hover {{
+    background-color: {T.get("SURFACE_1")};
+    border-color: {T.get("BORDER_STRONG")};
+    color: {T.get("TEXT_PRIMARY")};
+}}
 
 QPushButton#durationChip:checked,
-QPushButton#appIconTile:checked {
-    background-color: #172821;
-    border: 2px solid #5B6FE8;
-    color: #e8fffa;
-}
+QPushButton#appIconTile:checked {{
+    background-color: {T.get("ACCENT_DARK_BG")};
+    border: 2px solid {T.get("ACCENT")};
+    color: {T.get("ACCENT_TEXT")};
+}}
 
-QPushButton#appIconTile {
-    /* QSS width/height describe the content box; borders add 2 px. */
+QPushButton#appIconTile {{
     min-width: 94px;
     max-width: 94px;
     min-height: 104px;
     max-height: 104px;
-    border: 1px solid #2b3b50;
+    border: 1px solid {T.get("BORDER_SUBTLE")};
     border-radius: 12px;
     padding: 0;
-    background-color: #141d27;
-}
+    background-color: {T.get("INPUT_BG")};
+}}
 
-QPushButton#appIconTile:hover {
-    border-color: #5B6FE8;
-    background-color: #172233;
-}
+QPushButton#appIconTile:hover {{
+    border-color: {T.get("ACCENT")};
+    background-color: {T.get("SURFACE_1")};
+}}
 
-QPushButton#appIconTile:checked {
-    border: 2px solid #5B6FE8;
-    background-color: #17342F;
-}
+QPushButton#appIconTile:checked {{
+    border: 2px solid {T.get("ACCENT")};
+    background-color: {T.get("ACCENT_DARK_BG")};
+}}
 
-QWidget#appIconTilesScroll {
+QWidget#appIconTilesScroll {{
     border: none;
     background: transparent;
-}
+}}
 
-QLabel#appTileName {
-    color: #b0bcc8;
+QLabel#appTileName {{
+    color: {T.get("TEXT_SECONDARY")};
     font-size: 12px;
     font-weight: 500;
-}
+}}
 
-QLabel#appTileCheck {
+QLabel#appTileCheck {{
     min-width: 20px;
     max-width: 20px;
     min-height: 20px;
     max-height: 20px;
-    color: #071510;
-    background-color: #5B6FE8;
-    border: 2px solid #17342f;
+    color: #FFFFFF;
+    background-color: {T.get("ACCENT")};
+    border: 2px solid {T.get("ACCENT_DARK_BG")};
     border-radius: 10px;
     font-size: 12px;
     font-weight: bold;
-}
+}}
 
-QPushButton#appIconTile:checked QLabel#appTileName {
-    color: #a8efe1;
-}
+QPushButton#appIconTile:checked QLabel#appTileName {{
+    color: {T.get("ACCENT_TEXT")};
+}}
 
 QPushButton#durationChip:focus,
 QPushButton#appIconTile:focus,
 QPushButton#selectedAppChip:focus,
 QPushButton#addAppButton:focus,
-QPushButton#intensityChoice:focus {
-    border: 2px solid #a8efe1;
-}
+QPushButton#intensityChoice:focus {{
+    border: 2px solid {T.get("ACCENT")};
+}}
 
-QPushButton#selectedAppChip {
+QPushButton#selectedAppChip {{
     min-height: 34px;
-    color: #a8efe1;
-    border-color: #36594f;
+    color: {T.get("ACCENT_TEXT")};
+    border-color: {T.get("ACCENT_BORDER")};
     padding: 0 12px;
-}
+}}
 
-QPushButton#addAppButton {
+QPushButton#addAppButton {{
     min-height: 38px;
     background-color: transparent;
-    color: #a8efe1;
-    border: 1px dashed #4a6f65;
+    color: {T.get("ACCENT")};
+    border: 1px dashed {T.get("ACCENT_BORDER")};
     border-radius: 8px;
     padding: 0 14px;
-}
+}}
 
-QPushButton#addAppButton:hover {
-    background-color: #172821;
-    border-color: #5B6FE8;
-}
+QPushButton#addAppButton:hover {{
+    background-color: {T.get("ACCENT_DARK_BG")};
+    border-color: {T.get("ACCENT")};
+}}
 
-QPushButton#intensityChoice {
+QPushButton#intensityChoice {{
     min-width: 148px;
     min-height: 64px;
-    background-color: #192532;
-    color: #cbd5da;
-    border: 1px solid #334250;
+    background-color: {T.get("INPUT_BG")};
+    color: {T.get("TEXT_SECONDARY")};
+    border: 1px solid {T.get("BORDER_NORMAL")};
     border-radius: 10px;
     padding: 10px 12px;
     text-align: left;
-}
+}}
 
-QPushButton#intensityChoice:hover {
-    background-color: #21303d;
-    border-color: #536574;
-    color: #f3f6f7;
-}
+QPushButton#intensityChoice:hover {{
+    background-color: {T.get("SURFACE_1")};
+    border-color: {T.get("BORDER_STRONG")};
+    color: {T.get("TEXT_PRIMARY")};
+}}
 
-QPushButton#intensityChoice:checked {
-    background-color: #172821;
-    color: #e8fffa;
-    border: 2px solid #5B6FE8;
-    font-weight: bold;
-}
+QPushButton#intensityChoice:checked {{
+    background-color: {T.get("ACCENT_DARK_BG")};
+    color: {T.get("ACCENT_TEXT")};
+    border: 2px solid {T.get("ACCENT")};
+    font-weight: 600;
+}}
 
-QFrame#compactControl {
-    background-color: #0f171f;
-    border: 1px solid #26323e;
+QFrame#compactControl {{
+    background-color: {T.get("SURFACE_1")};
+    border: 1px solid {T.get("BORDER_SUBTLE")};
     border-radius: 9px;
-}
+}}
 
-QScrollBar:vertical {
+QScrollBar:vertical {{
     width: 8px;
     background: transparent;
-}
+}}
 
-QScrollBar::handle:vertical {
+QScrollBar::handle:vertical {{
     min-height: 30px;
-    background: #3a4855;
+    background: {T.get("BORDER_STRONG")};
     border-radius: 4px;
-}
+}}
 
 QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
+QScrollBar::sub-line:vertical {{
     height: 0;
-}
+}}
 """
 
 
@@ -992,6 +996,7 @@ class SettingsPanel(QWidget):
 
     start_clicked = pyqtSignal(object)  # Kept for MainWindow compatibility.
     config_changed = pyqtSignal(object)  # Emits FocusConfig after each user change.
+    manage_categories_requested = pyqtSignal()
 
     SETTINGS_ORGANIZATION = "FocusCapsule"
     SETTINGS_APPLICATION = "FocusCapsule"
@@ -1055,6 +1060,62 @@ class SettingsPanel(QWidget):
 
         scroll.setWidget(content)
         root.addWidget(scroll)
+
+        # --- Footer action bar ---
+        bar = QFrame()
+        bar.setObjectName("settingsFooterBar")
+        bar.setStyleSheet(f"""
+            #settingsFooterBar {{
+                background: {T.get("SURFACE_3", "#EDE8DC")};
+                border-top: 1px solid {T.get("BORDER_SUBTLE", "rgba(30,28,24,0.06)")};
+            }}
+        """)
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(24, 14, 24, 14)
+        bar_layout.setSpacing(12)
+
+        self._start_btn = QPushButton("开始专注")
+        self._start_btn.setObjectName("startFocusButton")
+        self._start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._start_btn.setMinimumHeight(44)
+        _btn_bg = T.get("ACCENT", "#A08458")
+        self._start_btn.setStyleSheet(f"""
+            #startFocusButton {{
+                color: {_btn_bg};
+                font-size: 15px;
+                font-weight: 700;
+                letter-spacing: 1px;
+                border: none;
+                border-radius: 12px;
+                background-color: {T.get("ACCENT_DARK_BG", "#EDE4D0")};
+            }}
+            #startFocusButton:hover {{
+                background-color: {T.get("ACCENT_HOVER", "#8C6F45")};
+                color: {T.get("NAV_BG", "#FFFFFF")};
+            }}
+            #startFocusButton:pressed {{
+                background-color: {T.get("ACCENT", "#A08458")};
+                color: {T.get("NAV_BG", "#FFFFFF")};
+            }}
+        """)
+        self._start_btn.clicked.connect(self._on_start_clicked)
+        bar_layout.addWidget(self._start_btn)
+
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar_layout.addWidget(spacer)
+
+        hint_label = QLabel("选择应用后自动启用拦截")
+        hint_label.setObjectName("footerHint")
+        hint_label.setStyleSheet("color: rgba(255,255,255,0.75); font-size: 12px;")
+        bar_layout.addWidget(hint_label)
+
+        root.addWidget(bar)
+
+    def _on_start_clicked(self):
+        """Emit the current config to start a focus session."""
+        cfg = self.get_config()
+        self.start_clicked.emit(cfg)
 
     def _new_section(self, title: str, hint: str = "") -> tuple[QFrame, QVBoxLayout]:
         section = QFrame()
@@ -1260,6 +1321,9 @@ class SettingsPanel(QWidget):
             no_apps.setWordWrap(True)
             layout.addWidget(no_apps)
 
+        app_actions = QHBoxLayout()
+        app_actions.setSpacing(8)
+
         self._other_apps_button = QPushButton()
         self._other_apps_button.setObjectName("addAppButton")
         self._other_apps_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1269,7 +1333,16 @@ class SettingsPanel(QWidget):
             "打开未显示在常用区的已安装应用图标列表"
         )
         self._other_apps_button.clicked.connect(self._open_app_picker)
-        layout.addWidget(self._other_apps_button, 0, Qt.AlignmentFlag.AlignLeft)
+        app_actions.addWidget(self._other_apps_button)
+
+        categories_button = QPushButton("管理应用分类")
+        categories_button.setObjectName("addAppButton")
+        categories_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        categories_button.setAccessibleName("管理所有应用的分类")
+        categories_button.clicked.connect(self.manage_categories_requested.emit)
+        app_actions.addWidget(categories_button)
+        app_actions.addStretch()
+        layout.addLayout(app_actions)
         self._refresh_other_apps_button()
 
         self._selected_summary = QLabel("已允许 0 个应用")
@@ -1528,15 +1601,24 @@ class SettingsPanel(QWidget):
         return "Standard"
 
     def get_config(self) -> FocusConfig:
+        allowed_app_paths: dict[str, str] = {}
+        for process in self._whitelist:
+            info = self._installed_by_process.get(process, {})
+            path = str(info.get("custom_path", "")).strip()
+            if not path:
+                chip = self._chip_widgets.get(process)
+                path = chip.custom_path if chip else ""
+            if path:
+                allowed_app_paths[process] = path
+
         config = FocusConfig(
             whitelist=list(self._whitelist),
             duration_minutes=self._custom_min_spin.value(),
             mode=self._get_selected_intensity(),
             max_esc=self._max_esc_spin.value(),
             esc_break_minutes=self._esc_break_spin.value(),
+            allowed_app_paths=allowed_app_paths,
         )
-        # FocusConfig is intentionally kept backward-compatible; these optional
-        # fields are attached dynamically until the shared model adopts them.
         config.goal = self._goal_edit.text().strip()
         config.custom_apps = list(self._custom_apps)
         return config
@@ -1553,17 +1635,41 @@ class SettingsPanel(QWidget):
                 for process in self._deduplicated(getattr(config, "whitelist", []))
             ]
             custom_apps = getattr(config, "custom_apps", None)
+            saved_app_paths = dict(getattr(config, "allowed_app_paths", {}) or {})
+            combined_custom_apps = self._deduplicated(
+                list(custom_apps or []) + list(saved_app_paths.values())
+            )
             if custom_apps is not None:
                 self._custom_apps = []
 
             self._custom_display_names.clear()
-            for path in self._deduplicated(custom_apps or []):
+            for path in combined_custom_apps:
                 validated_path = self._validated_app_path(path)
                 if not validated_path:
                     continue
                 path_obj = Path(validated_path)
                 identifier, display_name = self._custom_app_identity(validated_path)
                 identifier = identifier.casefold()
+                legacy_identifier = Path(path).name.casefold()
+                saved_identifiers = {
+                    str(process).casefold()
+                    for process, saved_path in saved_app_paths.items()
+                    if os.path.normcase(os.path.abspath(str(saved_path)))
+                    == os.path.normcase(os.path.abspath(str(path)))
+                }
+                if (
+                    legacy_identifier in requested_whitelist
+                    and legacy_identifier != identifier
+                ):
+                    requested_whitelist = [
+                        identifier if process == legacy_identifier else process
+                        for process in requested_whitelist
+                    ]
+                for saved_identifier in saved_identifiers:
+                    requested_whitelist = [
+                        identifier if process == saved_identifier else process
+                        for process in requested_whitelist
+                    ]
                 catalog_info = self._installed_by_process.get(identifier)
                 resolved_display = (
                     str(catalog_info.get("display_name", display_name))
@@ -1583,6 +1689,11 @@ class SettingsPanel(QWidget):
                     self._installed_by_process[identifier] = info
                     self._installed_apps.append(info)
                 self._add_primary_tile(info)
+
+            requested_whitelist = [
+                process.casefold()
+                for process in self._deduplicated(requested_whitelist)
+            ]
 
             # Migrate previously selected installed apps into the visible main
             # grid even when they predate pinned-app persistence.
@@ -1646,6 +1757,10 @@ class SettingsPanel(QWidget):
         settings.setValue("esc_break_minutes", config.esc_break_minutes)
         settings.setValue("whitelist", config.whitelist)
         settings.setValue("custom_apps", list(self._custom_apps))
+        settings.setValue(
+            "allowed_app_paths",
+            json.dumps(config.allowed_app_paths, ensure_ascii=False),
+        )
         settings.endGroup()
         settings.sync()
 
@@ -1658,6 +1773,7 @@ class SettingsPanel(QWidget):
             mode=str(settings.value("mode", "Standard") or "Standard"),
             max_esc=self._as_int(settings.value("max_esc", 2), 2),
             esc_break_minutes=self._as_int(settings.value("esc_break_minutes", 3), 3),
+            allowed_app_paths=self._as_path_map(settings.value("allowed_app_paths", "")),
         )
         config.goal = str(settings.value("goal", "") or "")
         config.custom_apps = self._as_string_list(settings.value("custom_apps", []))
@@ -1679,6 +1795,23 @@ class SettingsPanel(QWidget):
             return [str(item) for item in value if str(item)]
         text = str(value)
         return [text] if text else []
+
+    @staticmethod
+    def _as_path_map(value) -> dict[str, str]:
+        if isinstance(value, dict):
+            payload = value
+        else:
+            try:
+                payload = json.loads(str(value or "{}"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            str(process).strip().casefold(): str(path).strip()
+            for process, path in payload.items()
+            if str(process).strip() and str(path).strip()
+        }
 
     @staticmethod
     def _as_int(value, default: int) -> int:

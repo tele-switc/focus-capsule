@@ -11,22 +11,20 @@ from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QFrame,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
-    QWidget,
 )
 
-from focus_capsule.models import SessionRecord
 from focus_capsule.dialogs import ask_confirmation
+from focus_capsule.models import SessionRecord
+from focus_capsule.theme import ACCENT
 from focus_capsule.widgets import FocusRing
-from focus_capsule.theme import ACCENT, FONT_SECTION
-
 
 MODE_LABELS = {"Light": "轻柔", "Standard": "标准", "Deep": "深度"}
 
@@ -153,6 +151,7 @@ class HistoryWindow(QDialog):
 
         self._stack.setCurrentIndex(1)
         self._table.setRowCount(len(records))
+        # Iterate in reverse to show most recent sessions first
         for row, record in enumerate(reversed(records)):
             try:
                 started = datetime.fromisoformat(record.started_at)
@@ -213,7 +212,11 @@ class CompletionWindow(QDialog):
     def _setup_ui(self):
         outcome = getattr(self._record, "outcome", "completed")
         completed = outcome == "completed"
+        # Defend against a zero/missing planned duration: fall back to 0% to
+        # avoid a division-by-zero rather than surfacing a misleading 100%.
         planned_seconds = max(0, self._record.duration_minutes * 60)
+        # Cap progress at 100% so records that ran over their planned duration
+        # still render as a fully filled bar rather than overflowing the meter.
         progress = (
             min(100, int(self._record.actual_focus_seconds / planned_seconds * 100))
             if planned_seconds

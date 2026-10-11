@@ -18,9 +18,13 @@ from PyQt6.QtWidgets import (
 
 from focus_capsule.controller import SessionUpdate
 from focus_capsule.models import FocusConfig, SessionStatus
+from focus_capsule.theme import (
+    BREAK_ACCENT,
+    BREAK_LIGHT,
+    WEIGHT_NUMBER,
+    WEIGHT_SECTION,
+)
 from focus_capsule.widgets import FocusRing
-from focus_capsule.theme import BREAK_ACCENT, BREAK_LIGHT, WEIGHT_SECTION, WEIGHT_NUMBER, TEXT_TERTIARY
-
 
 MODE_LABELS = {
     "Light": "轻柔",
@@ -45,6 +49,10 @@ class SessionViewWindow(QWidget):
         self.setMinimumSize(500, 610)
         self.resize(560, 680)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setStyleSheet(
+            "QMainWindow, QWidget#appWindow { background-color: rgba(250, 246, 230, 0.88); }"
+        )
         self._setup_ui()
         self._center_window()
 
@@ -246,4 +254,3 @@ class SessionViewWindow(QWidget):
         self.hide_requested.emit()
         self.hide()
         event.ignore()
-

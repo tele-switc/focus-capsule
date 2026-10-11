@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 import sys
+import time
+from collections.abc import Callable
+from pathlib import Path
+from types import TracebackType
 
 from PyQt6.QtCore import QStandardPaths, Qt
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
@@ -14,6 +16,72 @@ from PyQt6.QtWidgets import QApplication
 from focus_capsule.dialogs import show_critical
 from focus_capsule.main_window import MainWindow
 from focus_capsule.styles import STYLESHEET
+
+EXCEPTION_DIALOG_COOLDOWN_SECONDS = 60.0
+
+
+class ExceptionHandler:
+    """Log every uncaught error without repeatedly covering the UI with dialogs."""
+
+    def __init__(
+        self,
+        log_path: Path,
+        *,
+        show_dialog: Callable[[object, str, str], None] = show_critical,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._log_path = log_path
+        self._show_dialog = show_dialog
+        self._clock = clock
+        self._last_dialog_at: dict[tuple[str, str, int], float] = {}
+        self._dialog_active = False
+
+    @staticmethod
+    def _fingerprint(
+        exc_type: type[BaseException],
+        exc_traceback: TracebackType | None,
+    ) -> tuple[str, str, int]:
+        frame = exc_traceback
+        while frame is not None and frame.tb_next is not None:
+            frame = frame.tb_next
+        location = frame.tb_frame.f_code.co_filename if frame is not None else ""
+        line = frame.tb_lineno if frame is not None else 0
+        return (f"{exc_type.__module__}.{exc_type.__qualname__}", location, line)
+
+    def __call__(
+        self,
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_traceback: TracebackType | None,
+    ) -> None:
+        logger = logging.getLogger("focus_capsule")
+        logger.error(
+            "Unhandled application error",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+
+        fingerprint = self._fingerprint(exc_type, exc_traceback)
+        now = self._clock()
+        last_dialog_at = self._last_dialog_at.get(fingerprint)
+        if self._dialog_active or (
+            last_dialog_at is not None
+            and now - last_dialog_at < EXCEPTION_DIALOG_COOLDOWN_SECONDS
+        ):
+            return
+
+        self._last_dialog_at[fingerprint] = now
+        self._dialog_active = True
+        try:
+            self._show_dialog(
+                None,
+                "专注舱遇到问题",
+                "应用遇到意外错误。你的历史记录仍保存在本机。\n\n"
+                f"诊断日志：{self._log_path}",
+            )
+        except Exception:
+            logger.exception("Unable to display the application error dialog")
+        finally:
+            self._dialog_active = False
 
 
 def _app_icon() -> QIcon:
@@ -49,6 +117,7 @@ def _configure_logging() -> Path:
 
 def main():
     app = QApplication(sys.argv)
+
     app.setApplicationName("Focus Capsule")
     app.setApplicationDisplayName("专注舱")
     app.setOrganizationName("FocusCapsule")
@@ -69,18 +138,7 @@ def main():
 
     log_path = _configure_logging()
 
-    def handle_exception(exc_type, exc_value, exc_traceback):
-        logging.getLogger("focus_capsule").exception(
-            "Unhandled application error",
-            exc_info=(exc_type, exc_value, exc_traceback),
-        )
-        show_critical(
-            None,
-            "专注舱遇到问题",
-            f"应用遇到意外错误。你的历史记录仍保存在本机。\n\n诊断日志：{log_path}",
-        )
-
-    sys.excepthook = handle_exception
+    sys.excepthook = ExceptionHandler(log_path)
 
     window = MainWindow()
     window.show()

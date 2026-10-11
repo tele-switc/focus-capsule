@@ -26,6 +26,7 @@ class ScheduleRule:
     label: str = ""
     max_esc: int = 2
     esc_break_minutes: int = 3
+    allowed_app_paths: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name, minimum, maximum in (
@@ -53,6 +54,13 @@ class ScheduleRule:
         )
         self.mode = self.mode if self.mode in {"Light", "Standard", "Deep"} else "Deep"
         self.label = str(self.label or "").strip()
+        if not isinstance(self.allowed_app_paths, dict):
+            self.allowed_app_paths = {}
+        self.allowed_app_paths = {
+            str(process).strip().casefold(): str(path).strip()
+            for process, path in self.allowed_app_paths.items()
+            if str(process).strip() and str(path).strip()
+        }
         try:
             self.max_esc = max(0, min(10, int(self.max_esc or 2)))
         except (TypeError, ValueError):
@@ -74,6 +82,7 @@ class ScheduleRule:
             "label": self.label,
             "max_esc": self.max_esc,
             "esc_break_minutes": self.esc_break_minutes,
+            "allowed_app_paths": dict(self.allowed_app_paths),
         }
 
     @classmethod
@@ -102,6 +111,7 @@ class ScheduleRule:
             label=str(data.get("label", "") or ""),
             max_esc=data.get("max_esc", 2),
             esc_break_minutes=data.get("esc_break_minutes", 3),
+            allowed_app_paths=data.get("allowed_app_paths", {}),
         )
 
 
@@ -124,6 +134,11 @@ class FocusConfig:
     esc_break_minutes: int = 3
     goal: str | None = None
     custom_apps: list[str] = field(default_factory=list)
+    allowed_app_paths: dict[str, str] = field(default_factory=dict)
+    source: str = "timer"
+    schedule_label: str = ""
+    schedule_start: str = ""
+    schedule_end: str = ""
 
 
 @dataclass
@@ -146,3 +161,8 @@ class SessionRecord:
     distractions: list[dict] = field(default_factory=list)
     goal: str | None = None
     outcome: str = "completed"
+    source: str = "timer"
+    schedule_label: str = ""
+    schedule_start: str = ""
+    schedule_end: str = ""
+    app_focus_seconds: dict[str, int] = field(default_factory=dict)

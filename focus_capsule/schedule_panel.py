@@ -16,139 +16,148 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from focus_capsule import theme as T
 from focus_capsule.models import ScheduleRule
 from focus_capsule.settings_panel import COMMON_APPS, InstalledAppPickerDialog
-from focus_capsule.theme import (
-    ACCENT, TEXT_TERTIARY, TEXT_SECONDARY, FONT_SECTION, FONT_META, FONT_BODY,
-    WEIGHT_BUTTON, RADIUS_MD, INPUT_BG, BORDER_NORMAL, BORDER_STRONG,
-    ACCENT_DARK_BG, ACCENT_TEXT, SURFACE_3,
-)
 
-SCHEDULE_STYLESHEET = """
-QFrame#scheduleSection {
-    background-color: #141d27;
-    border: 1px solid #26323e;
-    border-radius: 12px;
-}
 
-QLabel#scheduleTitle {
-    color: #eef3f4;
+def _s():
+    t = T.current()
+    return f"""
+QFrame#scheduleSection {{
+    background-color: {t["SURFACE_1"]};
+    border: 1px solid {t["BORDER_SUBTLE"]};
+    border-radius: 14px;
+}}
+
+QLabel#scheduleTitle {{
+    color: {t["TEXT_PRIMARY"]};
     font-size: 22px;
-    font-weight: bold;
-}
+    font-weight: 600;
+    letter-spacing: -0.3px;
+}}
 
-QLabel#scheduleSubtitle {
-    color: #93a1af;
+QLabel#scheduleSubtitle {{
+    color: {t["TEXT_SECONDARY"]};
     font-size: 12px;
-}
+}}
 
-QLabel#scheduleHint {
-    color: #93a1af;
+QLabel#scheduleHint {{
+    color: {t["TEXT_TERTIARY"]};
     font-size: 11px;
-}
+}}
 
-QLabel#ruleLabel {
-    color: #cbd5da;
+QLabel#ruleLabel {{
+    color: {t["TEXT_PRIMARY"]};
     font-size: 14px;
     font-weight: 600;
-}
+}}
 
-QLabel#ruleApps {
-    color: #a8efe1;
-    font-size: 11px;
-}
+QLabel#ruleApps {{
+    color: {t["TEXT_SECONDARY"]};
+    font-size: 13px;
+}}
 
-QTimeEdit {
+QTimeEdit {{
     min-height: 36px;
-    background-color: #0f171f;
-    color: #f3f6f7;
-    border: 1px solid #334250;
+    background-color: {t["INPUT_BG"]};
+    color: {t["TEXT_PRIMARY"]};
+    border: 1px solid {t["BORDER_NORMAL"]};
     border-radius: 8px;
     padding: 0 8px;
-    selection-background-color: #5B6FE8;
-    selection-color: #081310;
-}
-QTimeEdit:hover { border-color: #516170; }
-QTimeEdit:focus { border: 2px solid #5B6FE8; }
+    selection-background-color: {t["ACCENT_MUTED"]};
+}}
+QTimeEdit:hover {{ border-color: {t["BORDER_STRONG"]}; }}
+QTimeEdit:focus {{ border: 2px solid {t["ACCENT"]}; }}
 
-QFrame#ruleCard {
-    background-color: #141d27;
-    border: 1px solid #2b3b50;
-    border-radius: 10px;
-}
+QFrame#ruleCard {{
+    background-color: {t["SURFACE_1"]};
+    border: 1px solid {t["BORDER_NORMAL"]};
+    border-radius: 12px;
+}}
 
-QFrame#ruleCardActive {
-    background-color: #17342F;
-    border: 2px solid #5B6FE8;
-    border-radius: 10px;
-}
+QFrame#ruleCardActive {{
+    background-color: {t["ACCENT_DARK_BG"]};
+    border: 2px solid {t["ACCENT"]};
+    border-radius: 12px;
+}}
 
-QCheckBox {
-    color: #cbd5da;
+QCheckBox {{
+    color: {t["TEXT_PRIMARY"]};
     font-size: 12px;
     spacing: 8px;
-}
-QCheckBox::indicator {
+}}
+QCheckBox::indicator {{
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    border: 1px solid #334250;
-    background: #0f171f;
-}
-QCheckBox::indicator:checked {
-    background: #5B6FE8;
-    border-color: #5B6FE8;
-}
+    border: 1.5px solid {t["BORDER_STRONG"]};
+    background: transparent;
+}}
+QCheckBox::indicator:checked {{
+    background-color: {t["ACCENT"]};
+    border-color: {t["ACCENT"]};
+}}
 
-QPushButton#addRuleButton {
+QPushButton#addRuleButton {{
     min-height: 42px;
     background-color: transparent;
-    color: #a8efe1;
-    border: 1px dashed #4a6f65;
+    color: {t["ACCENT_TEXT"]};
+    border: 1px dashed {t["ACCENT_BORDER"]};
     border-radius: 10px;
     font-size: 14px;
     font-weight: 600;
-}
-QPushButton#addRuleButton:hover {
-    background-color: #172821;
-    border-color: #5B6FE8;
-}
-QPushButton#editRuleApps {
+}}
+QPushButton#addRuleButton:hover {{
+    background-color: {t["ACCENT_DARK_BG"]};
+    border-color: {t["ACCENT"]};
+}}
+QPushButton#editRuleApps {{
     min-height: 32px;
-    color: #a8efe1;
-    background-color: #0f171f;
-    border: 1px solid #36594f;
+    color: {t["ACCENT_TEXT"]};
+    background-color: {t["SURFACE_1"]};
+    border: 1px solid {t["BORDER_NORMAL"]};
     border-radius: 6px;
     padding: 0 10px;
-    font-size: 11px;
-}
-QPushButton#editRuleApps:hover {
-    background-color: #172821;
-}
-QPushButton#deleteRule {
+    font-size: 12px;
+}}
+QPushButton#editRuleApps:hover {{
+    background-color: {t["SURFACE_3"]};
+    border-color: {t["BORDER_STRONG"]};
+}}
+QPushButton#deleteRule {{
     min-height: 32px;
     min-width: 32px;
-    color: #f2a2a2;
+    color: {t["DANGER"]};
     background-color: transparent;
-    border: 1px solid #5b343b;
+    border: 1px solid {t["DANGER_BG"]};
     border-radius: 6px;
     font-size: 14px;
     font-weight: 700;
-}
-QPushButton#deleteRule:hover {
-    background-color: #2e1b22;
-    border-color: #8b4c56;
-}
+}}
+QPushButton#deleteRule:hover {{
+    background-color: {t["DANGER_BG"]};
+    border-color: {t["DANGER"]};
+}}
 """
+
+SCHEDULE_STYLESHEET = ""  # populated lazily
+
+
+def _schedule_stylesheet() -> str:
+    """Return the full schedule-panel stylesheet, evaluated lazily."""
+    return _s()
 
 
 def _format_hour_minute(hour: int, minute: int) -> str:
@@ -175,7 +184,7 @@ class SchedulePanel(QWidget):
         self._app_labels: dict[int, QLabel] = {}
         self._intensity_cards: dict[int, list] = {}
         self.setObjectName("schedulePanel")
-        self.setStyleSheet(SCHEDULE_STYLESHEET)
+        self.setStyleSheet(_schedule_stylesheet())
         self._load_installed_catalog()
         self._setup_ui()
         self.load_rules()
@@ -196,12 +205,12 @@ class SchedulePanel(QWidget):
 
     def _setup_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(16, 12, 16, 20)
         root.setSpacing(12)
 
         header = QVBoxLayout()
-        header.setSpacing(2)
-        title = QLabel("日程锁定")
+        header.setSpacing(6)
+        title = QLabel("自动锁定时段")
         title.setObjectName("scheduleTitle")
         subtitle = QLabel("按中国时间定时锁定，到点自动切换允许的应用")
         subtitle.setObjectName("scheduleSubtitle")
@@ -211,6 +220,7 @@ class SchedulePanel(QWidget):
         header.addWidget(title)
         header.addWidget(subtitle)
         header.addWidget(hint)
+        header.setContentsMargins(0, 4, 0, 8)
         root.addLayout(header)
 
         scroll = QScrollArea(self)
@@ -223,6 +233,7 @@ class SchedulePanel(QWidget):
         self._rules_layout = QVBoxLayout(self._rules_container)
         self._rules_layout.setContentsMargins(0, 0, 2, 0)
         self._rules_layout.setSpacing(10)
+        self._rules_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         scroll.setWidget(self._rules_container)
         root.addWidget(scroll, 1)
 
@@ -247,7 +258,9 @@ class SchedulePanel(QWidget):
         while self._rules_layout.count():
             item = self._rules_layout.takeAt(0)
             if item and item.widget():
-                item.widget().deleteLater()
+                widget = item.widget()
+                widget.setParent(None)
+                widget.deleteLater()
 
         rules = self._manager.rules
         active = self._manager.active_rule
@@ -261,6 +274,8 @@ class SchedulePanel(QWidget):
     def _build_rule_card(self, index: int, rule: ScheduleRule, is_active: bool) -> QFrame:
         card = QFrame()
         card.setObjectName("ruleCardActive" if is_active else "ruleCard")
+        card.setMinimumHeight(154)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 10, 14, 12)
         layout.setSpacing(8)
@@ -297,7 +312,7 @@ class SchedulePanel(QWidget):
         )
 
         arrow = QLabel("→")
-        arrow.setStyleSheet(f"color:{TEXT_TERTIARY};font-size:{FONT_SECTION}px;")
+        arrow.setStyleSheet(f"color:{T.TEXT_TERTIARY};font-size:{T.FONT_SECTION}px;")
 
         top.addWidget(time_start)
         top.addWidget(arrow)
@@ -305,13 +320,13 @@ class SchedulePanel(QWidget):
         top.addStretch()
 
         status_label = QLabel()
-        status_label.setStyleSheet(f"font-size:{FONT_META}px;")
+        status_label.setStyleSheet(f"font-size:{T.FONT_META}px;")
         if is_active:
             status_label.setText("● 锁定中")
-            status_label.setStyleSheet(f"color:{ACCENT};font-size:{FONT_META}px;font-weight:{WEIGHT_BUTTON};")
+            status_label.setStyleSheet(f"color:{T.ACCENT};font-size:{T.FONT_META}px;font-weight:{T.WEIGHT_BUTTON};")
         else:
             status_label.setText("待命")
-            status_label.setStyleSheet(f"color:{TEXT_TERTIARY};font-size:{FONT_META}px;")
+            status_label.setStyleSheet(f"color:{T.TEXT_TERTIARY};font-size:{T.FONT_META}px;")
         top.addWidget(status_label)
 
         self._status_labels = getattr(self, "_status_labels", {})
@@ -380,22 +395,22 @@ class SchedulePanel(QWidget):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {INPUT_BG};
-                    color: {TEXT_SECONDARY};
-                    border: 1px solid {BORDER_NORMAL};
-                    border-radius: {RADIUS_MD}px;
-                    font-size: {FONT_BODY}px;
-                    font-weight: {WEIGHT_BUTTON};
+                    background-color: {T.INPUT_BG};
+                    color: {T.TEXT_SECONDARY};
+                    border: 1px solid {T.BORDER_NORMAL};
+                    border-radius: {T.RADIUS_MD}px;
+                    font-size: {T.FONT_BODY}px;
+                    font-weight: {T.WEIGHT_BUTTON};
                     padding: 4px 14px;
                 }}
                 QPushButton:checked {{
-                    background-color: {ACCENT_DARK_BG};
-                    color: {ACCENT_TEXT};
-                    border: 2px solid {ACCENT};
+                    background-color: {T.ACCENT_DARK_BG};
+                    color: {T.ACCENT_TEXT};
+                    border: 2px solid {T.ACCENT};
                 }}
                 QPushButton:hover {{
-                    border-color: {BORDER_STRONG};
-                    background-color: {SURFACE_3};
+                    border-color: {T.BORDER_STRONG};
+                    background-color: {T.SURFACE_3};
                 }}
             """)
             btn.clicked.connect(
@@ -613,6 +628,14 @@ class SchedulePanel(QWidget):
                 if str(info.get("process_name", "")).strip()
             )
         )
+        rule.allowed_app_paths = {
+            str(info.get("process_name", "")).strip().casefold(): str(
+                info.get("custom_path", "")
+            ).strip()
+            for info in selected
+            if str(info.get("process_name", "")).strip()
+            and str(info.get("custom_path", "")).strip()
+        }
         self._manager.update_rule(index, rule)
         self.save_rules()
         self._refresh_rules_list()
@@ -639,7 +662,15 @@ class SchedulePanel(QWidget):
                 if isinstance(data, list):
                     for item in data:
                         try:
-                            rules.append(ScheduleRule.from_dict(item))
+                            rule = ScheduleRule.from_dict(item)
+                            refreshed_paths = dict(rule.allowed_app_paths)
+                            for process in rule.whitelisted_apps:
+                                info = self._installed_by_process.get(process, {})
+                                current_path = str(info.get("custom_path", "")).strip()
+                                if current_path:
+                                    refreshed_paths[process] = current_path
+                            rule.allowed_app_paths = refreshed_paths
+                            rules.append(rule)
                         except (TypeError, ValueError):
                             continue
             except (json.JSONDecodeError, TypeError, ValueError):

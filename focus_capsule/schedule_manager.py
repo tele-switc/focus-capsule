@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from focus_capsule.models import ScheduleRule
+from focus_capsule.process_matching import ProcessMatcher
 
 CST = timezone(timedelta(hours=8), name="CST")
 
@@ -106,6 +107,8 @@ class ScheduleManager(QObject):
         super().__init__(parent)
         self._rules: list[ScheduleRule] = []
         self._active_rule: ScheduleRule | None = None
+        self._process_matcher: ProcessMatcher | None = None
+        self._process_matcher_key: tuple[tuple[str, ...], tuple[tuple[str, str], ...]] | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_timer_tick)
@@ -249,16 +252,38 @@ class ScheduleManager(QObject):
             return list(self._active_rule.whitelisted_apps)
         return []
 
-    def is_process_allowed(self, process_name: str) -> bool:
+    def is_process_allowed(
+        self,
+        process_name: str,
+        executable_path: str = "",
+        process_id: int = 0,
+    ) -> bool:
         if not self._active_rule:
             return True
         process = (process_name or "").strip().casefold()
         if not process:
             return True
-        return any(
-            p.strip().casefold() == process
-            for p in self._active_rule.whitelisted_apps
+        matcher_key = (
+            tuple(
+                str(item).strip().casefold()
+                for item in self._active_rule.whitelisted_apps
+                if str(item).strip()
+            ),
+            tuple(
+                sorted(
+                    (
+                        str(name).strip().casefold(),
+                        str(path).strip(),
+                    )
+                    for name, path in self._active_rule.allowed_app_paths.items()
+                    if str(name).strip() and str(path).strip()
+                )
+            ),
         )
+        if self._process_matcher is None or matcher_key != self._process_matcher_key:
+            self._process_matcher = ProcessMatcher(matcher_key[0], dict(matcher_key[1]))
+            self._process_matcher_key = matcher_key
+        return self._process_matcher.is_allowed(process, executable_path, process_id)
 
     def rule_for_time(self, now: datetime | None = None) -> ScheduleRule | None:
         """Return the rule that would be active at the given time (or now)."""

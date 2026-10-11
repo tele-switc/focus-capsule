@@ -200,6 +200,19 @@ class IconCatalogHelperTests(unittest.TestCase):
                 os.path.normcase(str(foreground_app.resolve())),
             )
 
+    def test_onlyoffice_launcher_maps_to_foreground_editor(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary_directory:
+            install_root = Path(temporary_directory) / "ONLYOFFICE" / "DesktopEditors"
+            launcher = install_root / "DesktopEditors.exe"
+            foreground_app = install_root / "editors.exe"
+            _write_fake_pe(launcher)
+            _write_fake_pe(foreground_app)
+
+            self.assertEqual(
+                os.path.normcase(resolve_windows_app_target(str(launcher), "ONLYOFFICE")),
+                os.path.normcase(str(foreground_app.resolve())),
+            )
+
     def test_trusted_launcher_admits_windowed_console_but_not_updater(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary_directory:
             install_root = Path(temporary_directory) / "DingDing"

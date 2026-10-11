@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "2.1.0"
+  #define MyAppVersion "3.2.2"
 #endif
 
 #define MyAppName "Focus Capsule"

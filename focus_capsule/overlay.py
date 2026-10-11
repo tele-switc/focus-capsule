@@ -4,15 +4,28 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QObject, Qt, QTimer
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from focus_capsule.process_matching import ProcessMatcher
 from focus_capsule.theme import (
-    ACCENT, SURFACE_1, BORDER_NORMAL, TEXT_PRIMARY, TEXT_SECONDARY,
-    TEXT_TERTIARY, TEXT_DISABLED, FONT_PAGE_TITLE, FONT_SECTION,
-    FONT_BODY, FONT_AUX, FONT_META, WEIGHT_TITLE, RADIUS_XL,
-    BREAK_BG, BREAK_ACCENT, BREAK_LIGHT, WARNING,
+    ACCENT,
+    BORDER_NORMAL,
+    BREAK_ACCENT,
+    BREAK_BG,
+    FONT_AUX,
+    FONT_BODY,
+    FONT_PAGE_TITLE,
+    FONT_SECTION,
+    RADIUS_XL,
+    SURFACE_1,
+    TEXT_DISABLED,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    TEXT_TERTIARY,
+    WARNING,
+    WEIGHT_TITLE,
 )
 
 HAS_WIN32_POLL = False
@@ -25,6 +38,8 @@ except ImportError:
 
 
 class OverlayService(QObject):
+    closed = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._overlay_window: OverlayWindow | None = None
@@ -39,7 +54,13 @@ class OverlayService(QObject):
         except RuntimeError:
             return False
 
-    def show_overlay(self, app_name: str, return_seconds: int = 3, allowed_apps: list[str] | None = None):
+    def show_overlay(
+        self,
+        app_name: str,
+        return_seconds: int = 3,
+        allowed_apps: list[str] | None = None,
+        allowed_app_paths: dict[str, str] | None = None,
+    ):
         if self._alive(self._overlay_window):
             return
         window = OverlayWindow(
@@ -47,6 +68,25 @@ class OverlayService(QObject):
             return_seconds,
             lock_until_switch=return_seconds >= 5,
             allowed_apps=allowed_apps,
+            allowed_app_paths=allowed_app_paths,
+        )
+        self._overlay_window = window
+        window.destroyed.connect(lambda: self._clear_overlay(window))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def show_usage_limit(self, app_name: str) -> None:
+        """Block a daily-limited app until the user switches away from it."""
+        if self._alive(self._overlay_window):
+            return
+        window = OverlayWindow(
+            app_name,
+            return_seconds=5,
+            lock_until_switch=True,
+            blocked_apps=[app_name],
+            title_text="今日使用额度已用完",
+            subtitle_text=f"{OverlayWindow._friendly_app_name(app_name)} 已达到今天设置的上限，请切换到其他应用",
         )
         self._overlay_window = window
         window.destroyed.connect(lambda: self._clear_overlay(window))
@@ -57,6 +97,7 @@ class OverlayService(QObject):
     def _clear_overlay(self, window):
         if self._overlay_window is window:
             self._overlay_window = None
+            self.closed.emit()
 
     def hide_overlay(self):
         window, self._overlay_window = self._overlay_window, None
@@ -95,13 +136,22 @@ class OverlayWindow(QWidget):
         return_seconds: int = 3,
         lock_until_switch: bool = False,
         allowed_apps: list[str] | None = None,
+        allowed_app_paths: dict[str, str] | None = None,
+        blocked_apps: list[str] | None = None,
+        title_text: str = "",
+        subtitle_text: str = "",
         parent=None,
     ):
         super().__init__(parent)
         self._allow_close = False
         self._seconds_left = max(1, return_seconds)
         self._lock_until_switch = lock_until_switch
-        self._allowed_apps = {a.strip().casefold() for a in (allowed_apps or [])}
+        self._process_matcher = ProcessMatcher(allowed_apps or [], allowed_app_paths or {})
+        self._blocked_processes = {
+            str(process).strip().casefold()
+            for process in (blocked_apps or [])
+            if str(process).strip()
+        }
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
@@ -130,11 +180,11 @@ class OverlayWindow(QWidget):
         marker = QLabel("◉")
         marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
         marker.setStyleSheet(f"color:{ACCENT};font-size:28px;")
-        title = QLabel("这不在本轮专注计划中")
+        title = QLabel(title_text or "这不在本轮专注计划中")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(f"color:{TEXT_PRIMARY};font-size:{FONT_PAGE_TITLE}px;font-weight:{WEIGHT_TITLE};")
         friendly = self._friendly_app_name(app_name)
-        subtitle = QLabel(f"请切回 {friendly}，继续刚才的目标")
+        subtitle = QLabel(subtitle_text or f"请切回 {friendly}，继续刚才的目标")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f"color:{TEXT_SECONDARY};font-size:{FONT_SECTION}px;")
@@ -159,10 +209,7 @@ class OverlayWindow(QWidget):
         self._timer.timeout.connect(self._on_tick)
         self._timer.start()
 
-        # When lock_until_switch is active (Deep mode), poll the foreground
-        # window every second so the overlay can detect when the user switches
-        # back to an allowed app and dismiss itself.
-        if self._lock_until_switch and self._allowed_apps:
+        if self._lock_until_switch and ((allowed_apps or []) or self._blocked_processes):
             self._poll_timer = QTimer(self)
             self._poll_timer.setInterval(800)
             self._poll_timer.timeout.connect(self._poll_foreground)
@@ -179,7 +226,10 @@ class OverlayWindow(QWidget):
         if self._seconds_left > 0:
             self._countdown.setText(f"提醒将在 {self._seconds_left} 秒后结束")
         elif self._lock_until_switch:
-            self._countdown.setText("深度模式会保持拦截，直到你切回允许的应用")
+            if self._blocked_processes:
+                self._countdown.setText("切换到其他应用后会自动关闭")
+            else:
+                self._countdown.setText("深度模式会保持拦截，直到你切回允许的应用")
 
     def _on_tick(self):
         self._seconds_left = max(0, self._seconds_left - 1)
@@ -193,20 +243,37 @@ class OverlayWindow(QWidget):
     def _poll_foreground(self):
         """Check whether the user has switched back to an allowed app."""
         try:
-            import psutil
             import os
+
+            import psutil
             if HAS_WIN32_POLL:
                 hwnd = win32gui.GetForegroundWindow()
                 if not hwnd:
                     return
-                # Skip our own overlay window
                 if hwnd == int(self.winId()):
                     return
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 if not pid or pid == os.getpid():
                     return
-                process_name = psutil.Process(pid).name().strip().casefold()
-                if process_name in self._allowed_apps:
+                process = psutil.Process(pid)
+                process_name = process.name().strip().casefold()
+                try:
+                    executable_path = process.exe()
+                except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                    executable_path = ""
+                switched_from_blocked = (
+                    self._blocked_processes
+                    and process_name not in self._blocked_processes
+                )
+                switched_to_allowed = (
+                    not self._blocked_processes
+                    and self._process_matcher.is_allowed(
+                        process_name,
+                        executable_path,
+                        int(pid),
+                    )
+                )
+                if switched_from_blocked or switched_to_allowed:
                     self._poll_timer.stop()
                     self.allow_close()
                     self.close()
@@ -218,7 +285,8 @@ class OverlayWindow(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(13, 14, 17, 232))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(244, 241, 234, 50))
 
     def closeEvent(self, event):
         if not self._allow_close:
@@ -310,11 +378,10 @@ class BreakWindow(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor(13, 14, 17, 244))
-        painter.setPen(QColor("#3C4D67"))
+        painter.setBrush(QColor(244, 241, 234, 244))
+        painter.setPen(QColor("#A08458"))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 16, 16)
 
     def closeEvent(self, event):
         self._timer.stop()
         event.accept()
-

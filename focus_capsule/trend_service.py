@@ -12,10 +12,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from focus_capsule.data_models import CST, china_today
+from focus_capsule.data_models import china_today
 from focus_capsule.history_db import HistoryService
 from focus_capsule.models import SessionRecord
-
 
 CST_TZ = timezone(timedelta(hours=8), name="CST")
 
@@ -78,6 +77,9 @@ class TrendService:
         self._history = history
         self._app_config = app_config
 
+    def set_app_config(self, app_config) -> None:
+        self._app_config = app_config
+
     def _categorize(self, process_name: str) -> str:
         if self._app_config and self._app_config.app_categories:
             cf = process_name.strip().casefold()
@@ -87,7 +89,10 @@ class TrendService:
         return "其他"
 
     def get_day_summaries(self, days: int = 7) -> list[DaySummary]:
-        records = self._history.load_history()
+        return self._summarize_days(self._history.load_history(), days)
+
+    @staticmethod
+    def _summarize_days(records: list[SessionRecord], days: int) -> list[DaySummary]:
         today = china_today()
         start = today - timedelta(days=days - 1)
 
@@ -112,7 +117,8 @@ class TrendService:
         return [by_date[start + timedelta(days=i)] for i in range(days)]
 
     def get_trend(self, days: int = 7) -> TrendReport:
-        summaries = self.get_day_summaries(days)
+        records = self._history.load_history()
+        summaries = self._summarize_days(records, days)
         total_seconds = sum(s.total_focus_seconds for s in summaries)
         total_sessions = sum(s.session_count for s in summaries)
         avg = total_seconds / max(1, days) / 60.0
@@ -140,7 +146,6 @@ class TrendService:
         cat_seconds: dict[str, int] = defaultdict(int)
         cat_sessions: dict[str, int] = defaultdict(int)
         cat_apps: dict[str, set] = defaultdict(set)
-        records = self._history.load_history()
         cutoff = china_today() - timedelta(days=days)
         for r in records:
             d = _record_cst_date(r)

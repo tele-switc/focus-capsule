@@ -1,39 +1,65 @@
-"""Primary planning window and application lifecycle coordination.
+"""Focus Capsule primary planning window.
 
-UI redesign v3.0 — left navigation rail + lightweight top bar + open canvas.
+The Windows shell uses a readable navigation sidebar, compact context bar and
+calm work canvas.  Navigation always shows labels instead of relying on glyphs.
 """
 
 from __future__ import annotations
 
-from datetime import date
-
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QCloseEvent, QResizeEvent
+from PyQt6.QtGui import QAction, QCloseEvent
 from PyQt6.QtWidgets import (
-    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QMenu, QPushButton, QScrollArea, QSizePolicy,
-    QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget,
+    QApplication,
+    QButtonGroup,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QSystemTrayIcon,
+    QVBoxLayout,
+    QWidget,
 )
 
 from focus_capsule import theme as T
-from focus_capsule.controller import SessionController, SessionUpdate
+from focus_capsule.activity_tracker import ActivityTracker
 from focus_capsule.ai_report_service import AIReportService
 from focus_capsule.ambient_background import AmbientBackground
+from focus_capsule.app_categories import merge_catalog_categories
 from focus_capsule.calendar_page import CalendarPage
-from focus_capsule.data_models import AppConfig, china_today
+from focus_capsule.category_dialog import AppCategoryDialog
+from focus_capsule.controller import SessionController, SessionUpdate
+from focus_capsule.daily_progress import DailyProgressService
+from focus_capsule.data_models import china_today
 from focus_capsule.data_store import DataStore
 from focus_capsule.dialogs import ask_confirmation, show_information
 from focus_capsule.history_db import HistoryService
 from focus_capsule.history_window import CompletionWindow, HistoryWindow
+from focus_capsule.icon_utils import discover_installed_apps
 from focus_capsule.models import FocusConfig, ScheduleRule
 from focus_capsule.monitor import WindowMonitorThread
 from focus_capsule.overlay import OverlayService
-from focus_capsule.schedule_manager import ScheduleManager
+from focus_capsule.schedule_manager import ScheduleManager, _seconds_until_next_boundary
 from focus_capsule.schedule_panel import SchedulePanel
 from focus_capsule.session_view import SessionViewWindow
 from focus_capsule.settings_panel import SettingsPanel
 from focus_capsule.trend_page import TrendPage
 from focus_capsule.trend_service import TrendService
+
+NAV_LABELS = ["今日概览", "专注计划", "日程锁定", "专注日历", "数据趋势"]
+NAV_TOOLTIPS = ["查看并安排今天的任务", "专注计划", "日程锁定", "日历", "趋势"]
+
+PAGE_TITLES = {
+    0: ("今日概览", "安排任务并查看真实进度"),
+    1: ("专注计划", "配置专注会话"),
+    2: ("日程锁定", "自动化时间规则"),
+    3: ("日历", "每日专注记录"),
+    4: ("趋势", "专注数据分析"),
+}
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +73,18 @@ class MainWindow(QMainWindow):
         self._quitting = False
         self._session_view: SessionViewWindow | None = None
         self._history_service = HistoryService()
+        self._data_store = DataStore()
+        self._app_config = self._data_store.load_app_config()
+        try:
+            self._app_config, categories_changed = merge_catalog_categories(
+                self._app_config,
+                discover_installed_apps(),
+            )
+            if categories_changed:
+                self._data_store.save_app_config(self._app_config)
+        except Exception:
+            pass
+        self._activity_tracker = ActivityTracker(self._data_store, self)
         self._overlay_service = OverlayService(self)
         self._window_monitor = WindowMonitorThread(self)
         self._session_controller = SessionController(
@@ -58,39 +96,55 @@ class MainWindow(QMainWindow):
         self._schedule_manager = ScheduleManager(self)
         self._schedule_panel = SchedulePanel(self._schedule_manager, self)
 
-        # v2.1 services
-        self._data_store = DataStore()
-        self._app_config = self._data_store.load_app_config()
         self._trend_service = TrendService(self._history_service, self._app_config)
+        self._daily_progress = DailyProgressService(
+            self._history_service,
+            self._data_store,
+            self._app_config,
+        )
         self._ai_service = AIReportService(
             self._history_service, self._data_store, self._app_config
         )
 
-        # v2.1 UI pages
-        self._calendar_page = CalendarPage(self._trend_service, self)
+        self._calendar_page = CalendarPage(
+            self._trend_service,
+            self,
+            data_store=self._data_store,
+            progress_service=self._daily_progress,
+        )
         self._trend_page = TrendPage(self._trend_service, self)
-        from focus_capsule.daily_goal_page import DailyGoalWidget
+        from focus_capsule.daily_goal_page import DailyGoalPage as DailyGoalWidget
         self._daily_goal_widget = DailyGoalWidget(
-            self._data_store, self._trend_service, self._ai_service, self._app_config, self
+            self._data_store,
+            self._trend_service,
+            self._ai_service,
+            self._app_config,
+            self,
+            progress_service=self._daily_progress,
         )
 
-        # Session update → update today's goal
         self._session_controller.update_requested.connect(self._on_session_update)
         self._session_controller.session_completed.connect(self._on_session_completed)
         self._session_controller.session_completed.connect(self._on_session_record_saved)
         self._session_controller.tray_update.connect(self._on_tray_update)
         self._window_monitor.foreground_changed.connect(self._on_foreground_change)
 
-        # Schedule enforcement wiring
         self._schedule_manager.rule_activated.connect(self._on_schedule_activated)
         self._schedule_manager.rule_released.connect(self._on_schedule_released)
         self._window_monitor.foreground_changed.connect(self._on_schedule_foreground_check)
+        self._activity_tracker.usage_updated.connect(self._on_usage_updated)
 
         self._setup_ui()
         self._setup_tray()
 
+        if hasattr(self._daily_goal_widget, "open_focus_plan_requested"):
+            self._daily_goal_widget.open_focus_plan_requested.connect(self._show_settings)
         if hasattr(self._settings_panel, "config_changed"):
             self._settings_panel.config_changed.connect(self._on_config_changed)
+        if hasattr(self._settings_panel, "manage_categories_requested"):
+            self._settings_panel.manage_categories_requested.connect(
+                self._open_category_manager
+            )
         if hasattr(self._settings_panel, "start_clicked"):
             self._settings_panel.start_clicked.connect(self._start_session)
         if hasattr(self._schedule_panel, "rules_changed"):
@@ -98,8 +152,6 @@ class MainWindow(QMainWindow):
 
         self._center_window()
 
-        # Start the window monitor for schedule enforcement and the schedule
-        # manager itself.
         self._window_monitor.start()
         self._load_and_start_schedule()
 
@@ -115,102 +167,113 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── Ambient background layer ────────────────────────────
-        # Lives behind every other widget; transparent to mouse events.
-        self._ambient = AmbientBackground(central, orb_count=14)
+        self._ambient = AmbientBackground(central, orb_count=10)
         self._ambient.lower()
 
-        # ── Left navigation rail ────────────────────────────────
         nav_rail = self._build_nav_rail()
         root.addWidget(nav_rail)
 
-        # ── Right side: top bar + content canvas ────────────────
         right_side = QVBoxLayout()
         right_side.setContentsMargins(0, 0, 0, 0)
         right_side.setSpacing(0)
 
-        # Top bar
         top_bar = self._build_top_bar()
         right_side.addWidget(top_bar)
 
-        # Content canvas (QStackedWidget)
         self._content_stack = QStackedWidget()
         self._content_stack.setObjectName("canvas")
 
-        # Page 0: Today (daily goal widget, scrollable)
         today_scroll = self._wrap_in_scroll(self._daily_goal_widget)
         self._content_stack.addWidget(today_scroll)
-
-        # Page 1: Focus Plan (settings panel, scrollable)
         self._settings_panel.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
         )
         pomodoro_scroll = self._wrap_in_scroll(self._settings_panel)
         self._content_stack.addWidget(pomodoro_scroll)
-
-        # Page 2: Schedule
         schedule_scroll = self._wrap_in_scroll(self._schedule_panel)
         self._content_stack.addWidget(schedule_scroll)
-
-        # Page 3: Calendar
         self._content_stack.addWidget(self._calendar_page)
-
-        # Page 4: Trend
         self._content_stack.addWidget(self._trend_page)
 
         right_side.addWidget(self._content_stack, 1)
         root.addLayout(right_side, 1)
 
-        # Select default page
         self._nav_group.button(0).setChecked(True)
         self._content_stack.setCurrentIndex(0)
-        self._update_page_title(0)
+        self._update_page_header(0)
 
     def _build_nav_rail(self) -> QFrame:
         rail = QFrame()
         rail.setObjectName("navRail")
-        rail.setFixedWidth(76)
+        rail.setFixedWidth(T.NAV_WIDTH)
         rail.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
         layout = QVBoxLayout(rail)
-        layout.setContentsMargins(10, 12, 10, 12)
+        layout.setContentsMargins(16, 20, 16, 16)
         layout.setSpacing(6)
 
-        # Navigation button group (exclusive)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(0)
+        brand_name = QLabel("专注舱")
+        brand_name.setObjectName("navBrand")
+        brand_row.addWidget(brand_name, 1)
+        layout.addLayout(brand_row)
+        layout.addSpacing(28)
+
+        section_label = QLabel("工作区")
+        section_label.setObjectName("navSectionLabel")
+        layout.addWidget(section_label)
+        layout.addSpacing(4)
+
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
 
-        nav_items = [
-            ("今日", 0),
-            ("专注", 1),
-            ("日程", 2),
-            ("日历", 3),
-            ("趋势", 4),
-        ]
-        for label, idx in nav_items:
-            btn = QPushButton(label)
+        for idx in range(5):
+            btn = QPushButton(NAV_LABELS[idx])
             btn.setObjectName("navBtn")
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setProperty("navIndex", idx)
+            btn.setToolTip(NAV_TOOLTIPS[idx])
             self._nav_group.addButton(btn, idx)
             layout.addWidget(btn)
 
         self._nav_group.idClicked.connect(self._set_page)
 
-        # Spacer pushing history + quit to bottom
         layout.addStretch()
 
-        # History button
-        history_btn = QPushButton("历史")
-        history_btn.setObjectName("navBtn")
+        local_card = QFrame()
+        local_card.setObjectName("navLocalCard")
+        local_layout = QVBoxLayout(local_card)
+        local_layout.setContentsMargins(12, 10, 12, 10)
+        local_layout.setSpacing(2)
+        local_title = QLabel("●  本地专注空间")
+        local_title.setObjectName("navLocalTitle")
+        local_layout.addWidget(local_title)
+        local_note = QLabel("记录只保存在这台电脑")
+        local_note.setObjectName("navLocalNote")
+        local_note.setWordWrap(True)
+        local_layout.addWidget(local_note)
+        layout.addWidget(local_card)
+        layout.addSpacing(10)
+
+        divider = QFrame()
+        divider.setObjectName("navDivider")
+        divider.setFixedHeight(1)
+        layout.addWidget(divider)
+        layout.addSpacing(6)
+
+        history_btn = QPushButton("☷    历史记录")
+        history_btn.setObjectName("navSecondaryBtn")
         history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        history_btn.setToolTip("历史记录")
         history_btn.clicked.connect(self._show_history)
         layout.addWidget(history_btn)
 
-        # Quit button
-        quit_btn = QPushButton("退出")
-        quit_btn.setObjectName("navBtn")
+        quit_btn = QPushButton("⏻    退出专注舱")
+        quit_btn.setObjectName("navSecondaryBtn")
         quit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        quit_btn.setToolTip("退出")
         quit_btn.clicked.connect(self._quit_app)
         layout.addWidget(quit_btn)
 
@@ -219,41 +282,36 @@ class MainWindow(QMainWindow):
     def _build_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setObjectName("topBar")
-        bar.setFixedHeight(44)
+        bar.setFixedHeight(T.TOP_BAR_HEIGHT)
         bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(20, 0, 20, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(32, 12, 28, 12)
+        layout.setSpacing(16)
 
-        # Dynamic page title
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        title_box.setContentsMargins(0, 0, 0, 0)
+
         self._page_title_label = QLabel("今日")
         self._page_title_label.setObjectName("pageTitle")
-        self._page_title_label.setStyleSheet(
-            f"font-size:{T.FONT_PAGE_TITLE - 8}px; font-weight:{T.WEIGHT_TITLE};"
-        )
-        layout.addWidget(self._page_title_label)
+        title_box.addWidget(self._page_title_label)
 
-        # Date string
+        self._page_subtitle_label = QLabel("Agent 执行工作区")
+        self._page_subtitle_label.setObjectName("pageSubtitle")
+        title_box.addWidget(self._page_subtitle_label)
+
+        layout.addLayout(title_box)
+
         self._date_label = QLabel("")
-        self._date_label.setStyleSheet(
-            f"color:{T.TEXT_TERTIARY}; font-size:{T.FONT_BODY_SMALL}px;"
-        )
+        self._date_label.setObjectName("dateChip")
         self._refresh_date_label()
+        layout.addStretch()
         layout.addWidget(self._date_label)
 
-        layout.addStretch()
-
-        # Privacy indicator
-        privacy = QLabel("●  数据仅保存在本机")
-        privacy.setObjectName("tinyMuted")
-        privacy.setToolTip("专注记录不会上传到云端")
-        layout.addWidget(privacy)
-
-        # Settings gear
-        settings_btn = QPushButton("⚙")
-        settings_btn.setObjectName("ghostButton")
-        settings_btn.setFixedSize(36, 36)
+        settings_btn = QPushButton("⚙  设置")
+        settings_btn.setObjectName("topSettingsButton")
+        settings_btn.setFixedHeight(36)
         settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         settings_btn.setToolTip("设置")
         settings_btn.clicked.connect(self._show_settings)
@@ -266,18 +324,13 @@ class MainWindow(QMainWindow):
         weekdays = ["一", "二", "三", "四", "五", "六", "日"]
         weekday_idx = today.weekday()
         self._date_label.setText(
-            f"{today.year}年{today.month}月{today.day}日 · 周{weekdays[weekday_idx]}"
+            f"{today.year} 年 {today.month} 月 {today.day} 日  ·  周{weekdays[weekday_idx]}"
         )
 
-    def _update_page_title(self, page_id: int) -> None:
-        titles = {
-            0: "今日",
-            1: "专注计划",
-            2: "日程锁定",
-            3: "日历",
-            4: "趋势",
-        }
-        self._page_title_label.setText(titles.get(page_id, ""))
+    def _update_page_header(self, page_id: int) -> None:
+        title, subtitle = PAGE_TITLES.get(page_id, ("", ""))
+        self._page_title_label.setText(title)
+        self._page_subtitle_label.setText(subtitle)
 
     def _wrap_in_scroll(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()
@@ -293,37 +346,25 @@ class MainWindow(QMainWindow):
 
     def _set_page(self, page_id: int) -> None:
         self._content_stack.setCurrentIndex(page_id)
-        self._update_page_title(page_id)
-        # Refresh pages that depend on fresh data
+        self._update_page_header(page_id)
         if page_id == 0:
-            self._daily_goal_widget.refresh()
+            self._daily_goal_widget.reload_goal()
         elif page_id == 3:
             self._calendar_page.refresh()
         elif page_id == 4:
             self._trend_page.refresh()
 
     def _show_settings(self):
-        """Jump to the Focus Plan page where settings live."""
         self._nav_group.button(1).setChecked(True)
         self._set_page(1)
 
     def _refresh_global_style(self):
-        """Rebuild and re-apply the QSS after a theme switch (e.g. focus mode)."""
         app = QApplication.instance()
         if app:
             from focus_capsule.styles import _build_stylesheet
             app.setStyleSheet(_build_stylesheet())
 
-    # ------------------------------------------------------------------
-    # Config change handler (replaces old _update_summary)
-    # ------------------------------------------------------------------
-
     def _on_config_changed(self, *_) -> None:
-        """Called when settings panel or schedule panel changes.
-
-        With the summary panel removed, this now only updates the tray
-        tooltip to reflect schedule enforcement status.
-        """
         if self._schedule_manager.is_active and not self._session_controller.is_active:
             rule = self._schedule_manager.active_rule
             if rule and hasattr(self, "_tray"):
@@ -338,15 +379,15 @@ class MainWindow(QMainWindow):
 
     def _start_session(self, config: FocusConfig):
         if not config.whitelist:
-            show_information(
-                self,
-                "还差一步",
-                "请先选择至少一个专注期间允许使用的应用。",
-            )
+            show_information(self, "还差一步", "请先选择至少一个专注期间允许使用的应用。")
             return
 
         if hasattr(self._settings_panel, "save_config"):
             self._settings_panel.save_config()
+
+        remaining_unlocks = self._daily_progress.remaining_unlocks_today()
+        if remaining_unlocks is not None:
+            config.max_esc = min(config.max_esc, remaining_unlocks)
 
         T.set_focused(True)
         self._refresh_global_style()
@@ -374,12 +415,9 @@ class MainWindow(QMainWindow):
         if not self._session_controller.is_active:
             return
         confirmed = ask_confirmation(
-            self._session_view or self,
-            "提前结束本次专注？",
+            self._session_view or self, "提前结束本次专注？",
             "当前进度会保存到历史记录。",
-            confirm_text="结束并保存",
-            cancel_text="继续专注",
-            destructive=True,
+            confirm_text="结束并保存", cancel_text="继续专注", destructive=True,
         )
         if confirmed:
             self._session_controller.terminate()
@@ -389,10 +427,8 @@ class MainWindow(QMainWindow):
             self._session_view.hide(to_tray=True)
         if self._tray.isVisible():
             self._tray.showMessage(
-                "专注仍在继续",
-                "点击托盘图标可重新打开专注窗口。",
-                QSystemTrayIcon.MessageIcon.Information,
-                2500,
+                "专注仍在继续", "点击托盘图标可重新打开专注窗口。",
+                QSystemTrayIcon.MessageIcon.Information, 2500,
             )
 
     def _on_session_update(self, update: SessionUpdate):
@@ -403,22 +439,12 @@ class MainWindow(QMainWindow):
         if self._session_view:
             self._session_view.finish_and_close()
             self._session_view = None
-
         T.set_focused(False)
         self._refresh_global_style()
-
-        # Do NOT stop the window monitor here — it needs to keep running
-        # for schedule-based enforcement. Only hide the session-specific
-        # overlay.
         self._overlay_service.hide_overlay()
         self._overlay_service.hide_break_window()
-
         if self._quitting:
             return
-
-        # Use an independent top-level dialog: the planning window is hidden
-        # during a session, and some window managers also hide its child
-        # dialogs when the parent is not visible.
         completion = CompletionWindow(record)
         completion.show()
         completion.raise_()
@@ -429,27 +455,63 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def _on_session_record_saved(self, record):
-        """Update daily goals, trend, calendar with the new record."""
         completed = getattr(record, "outcome", "") == "completed"
         terminated = getattr(record, "outcome", "") == "terminated"
         achieved_minutes = max(0, getattr(record, "actual_focus_seconds", 0)) // 60
-        self._data_store.update_today_goal_from_session(
-            achieved_minutes, completed, terminated
-        )
-        # refresh any currently-visible pages
-        self._daily_goal_widget.refresh()
+        self._data_store.update_today_goal_from_session(achieved_minutes, completed, terminated)
+        self._daily_goal_widget.reload_goal()
         self._calendar_page.refresh()
         self._trend_page.refresh()
 
-    def _on_foreground_change(self, process_name: str, window_title: str):
-        self._session_controller.on_foreground_change(process_name, window_title)
+    def _on_foreground_change(
+        self,
+        process_name: str,
+        window_title: str,
+        executable_path: str = "",
+        process_id: int = 0,
+    ):
+        self._activity_tracker.on_foreground_change(
+            process_name,
+            window_title,
+            executable_path,
+        )
+        self._session_controller.on_foreground_change(
+            process_name,
+            window_title,
+            executable_path,
+            process_id,
+        )
 
-    # ------------------------------------------------------------------
-    # Legacy mode toggle compat — redirect to new page system
-    # ------------------------------------------------------------------
+    def _on_usage_updated(self, process_name: str) -> None:
+        if self._quitting or process_name == "__focus_capsule__":
+            return
+        # A foreground switch flushes the app that was just left. Only enforce
+        # a limit when that app is still the active window; otherwise an old
+        # app could cover the newly selected one with a stale blocking overlay.
+        if self._window_monitor.last_process != process_name:
+            return
+        exceeded = self._daily_progress.exceeded_usage_limit(process_name)
+        if exceeded is None:
+            return
+        self._overlay_service.show_usage_limit(process_name)
+        label, used, limit = exceeded
+        self._tray.setToolTip(f"专注舱 · {label} 已使用 {used}/{limit} 分钟")
+        self._daily_goal_widget.reload_goal()
+
+    def _open_category_manager(self) -> None:
+        dialog = AppCategoryDialog(self._data_store, self)
+        dialog.categories_saved.connect(self._on_categories_saved)
+        dialog.exec()
+
+    def _on_categories_saved(self, config) -> None:
+        self._app_config = config
+        self._trend_service.set_app_config(config)
+        self._daily_progress.set_app_config(config)
+        self._daily_goal_widget.update_app_config(config)
+        self._calendar_page.refresh()
+        self._trend_page.refresh()
 
     def _set_mode(self, mode_id: int) -> None:
-        """Legacy callback — now routes to the new page system."""
         self._set_page(mode_id)
 
     # ------------------------------------------------------------------
@@ -457,12 +519,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _load_and_start_schedule(self) -> None:
-        """Load persisted rules into the manager and start the ticker."""
         self._schedule_panel.load_rules()
         self._schedule_manager.start()
 
     def _on_schedule_activated(self, rule) -> None:
-        """Called when a schedule rule becomes active."""
         if self._quitting or self._session_controller.is_active:
             return
         time_range = (
@@ -470,21 +530,18 @@ class MainWindow(QMainWindow):
             f"{rule.end_hour:02d}:{rule.end_minute:02d}"
         )
         self._tray.showMessage(
-            "日程锁定已生效",
-            f"{time_range} 期间只能使用已允许的应用",
-            QSystemTrayIcon.MessageIcon.Information,
-            3000,
+            "日程锁定已生效", f"{time_range} 期间只能使用已允许的应用",
+            QSystemTrayIcon.MessageIcon.Information, 3000,
         )
         self._on_tray_update(True)
         self._schedule_panel.refresh_active_status()
         self._start_schedule_session(rule)
 
     def _on_schedule_released(self, _rule) -> None:
-        """Called when a schedule rule's time window ends."""
         if self._quitting:
             return
         if self._session_controller.is_active:
-            self._session_controller.terminate()
+            self._session_controller.finish_scheduled_session()
         if self._session_view:
             self._session_view.finish_and_close()
             self._session_view = None
@@ -495,47 +552,51 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         self._tray.showMessage(
-            "日程锁定已解除",
-            "锁定时段结束，可自由使用应用",
-            QSystemTrayIcon.MessageIcon.Information,
-            2500,
+            "日程锁定已解除", "锁定时段结束，可自由使用应用",
+            QSystemTrayIcon.MessageIcon.Information, 2500,
         )
         self._on_tray_update(False)
         self._schedule_panel.refresh_active_status()
 
     def _enforce_active_schedule_for_current_window(self) -> None:
-        """Apply a newly active rule without blocking an already allowed app."""
         if self._quitting or self._session_controller.is_active:
             return
         if self._window_monitor.is_focus_capsule_foreground:
             return
         process_name = self._window_monitor.last_process
         window_title = self._window_monitor.last_title
+        executable_path = self._window_monitor.last_executable_path
         if process_name:
-            self._on_schedule_foreground_check(process_name, window_title)
+            self._on_schedule_foreground_check(
+                process_name,
+                window_title,
+                executable_path,
+                self._window_monitor.last_pid,
+            )
 
     def _start_schedule_session(self, rule: ScheduleRule):
-        """Start a focused session based on an activated schedule rule."""
         if not rule.whitelisted_apps:
-            show_information(
-                self,
-                "通知",
-                "日程锁定规则不允许任何应用，请先设置允许的应用。",
-            )
+            show_information(self, "通知", "日程锁定规则不允许任何应用，请先设置允许的应用。")
             return
-
+        remaining_seconds = max(60, _seconds_until_next_boundary(rule))
         config = FocusConfig(
-            duration_minutes=60,
+            duration_minutes=max(1, (remaining_seconds + 59) // 60),
             mode="Deep",
             goal="通过日程锁定进行专注",
             whitelist=rule.whitelisted_apps,
             max_esc=getattr(rule, "max_esc", 0),
             esc_break_minutes=getattr(rule, "esc_break_minutes", 3),
+            allowed_app_paths=dict(getattr(rule, "allowed_app_paths", {})),
+            source="schedule",
+            schedule_label=getattr(rule, "label", "") or "日程锁定",
+            schedule_start=f"{rule.start_hour:02d}:{rule.start_minute:02d}",
+            schedule_end=f"{rule.end_hour:02d}:{rule.end_minute:02d}",
         )
-
+        remaining_unlocks = self._daily_progress.remaining_unlocks_today()
+        if remaining_unlocks is not None:
+            config.max_esc = min(config.max_esc, remaining_unlocks)
         T.set_focused(True)
         self._refresh_global_style()
-
         try:
             self._session_view = SessionViewWindow(config)
             self._session_view.break_requested.connect(self._session_controller.handle_escape)
@@ -559,24 +620,32 @@ class MainWindow(QMainWindow):
         if not self._session_controller.is_active:
             return
         confirmed = ask_confirmation(
-            self._session_view or self,
-            "提前结束日程锁定？",
+            self._session_view or self, "提前结束日程锁定？",
             "日程锁定期间专注的进度会保存到历史记录。",
-            confirm_text="结束并保存",
-            cancel_text="继续专注",
-            destructive=True,
+            confirm_text="结束并保存", cancel_text="继续专注", destructive=True,
         )
         if confirmed:
             self._session_controller.terminate()
             self._schedule_manager.suppress_active_rule()
 
-    def _on_schedule_foreground_check(self, process_name: str, _window_title: str) -> None:
-        """Check foreground app against schedule rules when no manual session is active."""
+    def _on_schedule_foreground_check(
+        self,
+        process_name: str,
+        _window_title: str,
+        executable_path: str = "",
+        process_id: int = 0,
+    ) -> None:
+        if process_name == "__focus_capsule__":
+            return
         if self._session_controller.is_active:
             return
         if not self._schedule_manager.is_active:
             return
-        if not self._schedule_manager.is_process_allowed(process_name):
+        if not self._schedule_manager.is_process_allowed(
+            process_name,
+            executable_path,
+            process_id,
+        ):
             system_processes = {"explorer.exe", "shell.exe", "windows.ui.shell.lightswitch.exe"}
             if process_name in system_processes:
                 return
@@ -584,9 +653,11 @@ class MainWindow(QMainWindow):
             first_app = rule.whitelisted_apps[0] if rule and rule.whitelisted_apps else process_name
             if not self._overlay_service._alive(self._overlay_service._overlay_window):
                 self._overlay_service.show_overlay(
-                    first_app,
-                    return_seconds=5,
+                    first_app, return_seconds=5,
                     allowed_apps=rule.whitelisted_apps if rule else None,
+                    allowed_app_paths=(
+                        dict(getattr(rule, "allowed_app_paths", {})) if rule else None
+                    ),
                 )
             self._tray.setToolTip("专注舱 · 日程锁定中")
         else:
@@ -620,13 +691,9 @@ class MainWindow(QMainWindow):
     def _on_tray_update(self, active: bool):
         self._tray.setToolTip("专注舱 · 专注进行中" if active else "专注舱")
         self._tray_show_session_action.setVisible(active)
-        self._tray_show_action.setText("打开专注舱")
 
     def _on_tray_activated(self, reason):
-        if reason in (
-            QSystemTrayIcon.ActivationReason.Trigger,
-            QSystemTrayIcon.ActivationReason.DoubleClick,
-        ):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
             if self._session_controller.is_active:
                 self._show_session_from_tray()
             else:
@@ -686,12 +753,9 @@ class MainWindow(QMainWindow):
             return
         if self._session_controller.is_active:
             confirmed = ask_confirmation(
-                self._session_view or self,
-                "结束专注并退出？",
+                self._session_view or self, "结束专注并退出？",
                 "当前专注仍在进行。退出前会保存现有进度。",
-                confirm_text="结束并退出",
-                cancel_text="继续专注",
-                destructive=True,
+                confirm_text="结束并退出", cancel_text="继续专注", destructive=True,
             )
             if not confirmed:
                 return
@@ -699,10 +763,10 @@ class MainWindow(QMainWindow):
             self._session_controller.terminate()
         else:
             self._quitting = True
-
         T.set_focused(False)
         self._refresh_global_style()
         self._window_monitor.stop()
+        self._activity_tracker.stop()
         self._schedule_manager.stop()
         self._overlay_service.hide_overlay()
         self._overlay_service.hide_break_window()

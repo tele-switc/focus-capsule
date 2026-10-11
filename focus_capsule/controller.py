@@ -3,8 +3,16 @@ from datetime import datetime
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from focus_capsule.models import DistractionEntry, FocusConfig, SessionRecord, SessionStatus
+from focus_capsule.models import (
+    DistractionEntry,
+    FocusConfig,
+    SessionRecord,
+    SessionStatus,
+)
 from focus_capsule.monitor import WindowMonitorThread
+from focus_capsule.process_matching import ProcessMatcher
+
+DISALLOWED_FOREGROUND_GRACE_MS = 1200
 
 
 @dataclass
@@ -52,13 +60,24 @@ class SessionController(QObject):
         self._distractions = 0
         self._distraction_apps: dict[str, int] = {}
         self._distraction_events: list[DistractionEntry] = []
+        self._app_focus_seconds: dict[str, int] = {}
+        self._current_focus_process = ""
         self._status = SessionStatus.IDLE
         self._break_remaining = 0
         self._started_at: datetime | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._on_timer_tick)
+        self._foreground_grace_timer = QTimer(self)
+        self._foreground_grace_timer.setSingleShot(True)
+        self._foreground_grace_timer.setInterval(DISALLOWED_FOREGROUND_GRACE_MS)
+        self._foreground_grace_timer.timeout.connect(self._enforce_pending_distraction)
+        self._pending_distraction: tuple[str, str, str, int] | None = None
         self._terminated = False
+        self._process_matcher = ProcessMatcher()
+        closed_signal = getattr(self._overlay, "closed", None)
+        if closed_signal is not None and hasattr(closed_signal, "connect"):
+            closed_signal.connect(self._on_overlay_closed)
 
     @property
     def status(self):
@@ -102,6 +121,7 @@ class SessionController(QObject):
         }
 
     def start_session(self, config: FocusConfig):
+        self._cancel_pending_distraction()
         try:
             duration_minutes = int(config.duration_minutes)
         except (TypeError, ValueError):
@@ -115,10 +135,16 @@ class SessionController(QObject):
         self._distractions = 0
         self._distraction_apps.clear()
         self._distraction_events.clear()
+        self._app_focus_seconds.clear()
+        self._current_focus_process = ""
         self._status = SessionStatus.RUNNING
         self._break_remaining = 0
         self._started_at = datetime.now().astimezone()
         self._terminated = False
+        self._process_matcher = ProcessMatcher(
+            config.whitelist,
+            getattr(config, "allowed_app_paths", {}),
+        )
         self._timer.start()
         self.tray_update.emit(True)
         self._emit_update()
@@ -126,10 +152,22 @@ class SessionController(QObject):
     def _on_timer_tick(self):
         if self._status in {SessionStatus.RUNNING, SessionStatus.OVERLAY}:
             self._elapsed += 1
+            if self._status == SessionStatus.RUNNING and self._current_focus_process:
+                process = self._current_focus_process
+                self._app_focus_seconds[process] = (
+                    self._app_focus_seconds.get(process, 0) + 1
+                )
             if self._elapsed >= self._total_seconds:
                 self.complete_session()
             else:
                 self._emit_update()
+
+    def _on_overlay_closed(self):
+        """Called when overlay window is destroyed (auto-close or user dismiss)."""
+        if self._status == SessionStatus.OVERLAY:
+            self._status = SessionStatus.RUNNING
+            self._overlay.hide_overlay()
+            self._emit_update()
 
     def _emit_update(self):
         update = SessionUpdate(
@@ -160,6 +198,7 @@ class SessionController(QObject):
         self._esc_remaining -= 1
         self._esc_used += 1
         self._status = SessionStatus.BREAK
+        self._cancel_pending_distraction()
         self._break_remaining = (self._config.esc_break_minutes if self._config else 3) * 60
         self._overlay.hide_overlay()
 
@@ -197,20 +236,31 @@ class SessionController(QObject):
             return
         current = (window_monitor._last_process or "").strip().casefold()
         if self._config and current:
-            allowed = any(p.strip().casefold() == current for p in self._config.whitelist)
+            allowed = self._process_matcher.is_allowed(
+                current,
+                window_monitor.last_executable_path,
+                window_monitor.last_pid,
+            )
             if not allowed:
                 self._status = SessionStatus.OVERLAY
                 self._overlay.show_overlay(
                     self._config.whitelist[0],
                     return_seconds=5 if self._config.mode == "Deep" else 3,
                     allowed_apps=list(self._config.whitelist),
+                    allowed_app_paths=dict(getattr(self._config, "allowed_app_paths", {})),
                 )
             else:
                 self._status = SessionStatus.RUNNING
                 self._overlay.hide_overlay()
             self._emit_update()
 
-    def on_foreground_change(self, process_name: str, window_title: str):
+    def on_foreground_change(
+        self,
+        process_name: str,
+        window_title: str,
+        executable_path: str = "",
+        process_id: int = 0,
+    ):
         if self._terminated or self._status not in {
             SessionStatus.RUNNING,
             SessionStatus.OVERLAY,
@@ -245,16 +295,58 @@ class SessionController(QObject):
             "lsass.exe",
             "runtimebroker.exe",
             "dllhost.exe",
+            "taskmgr.exe",
+            "taskmgr",
+            "__focus_capsule__",
         }
         if process in allowed_system:
+            self._current_focus_process = ""
+            self._cancel_pending_distraction()
             return
 
-        allowed = any(p.strip().casefold() == process for p in self._config.whitelist)
+        allowed = self._process_matcher.is_allowed(
+            process,
+            executable_path,
+            process_id,
+        )
         if allowed:
+            self._cancel_pending_distraction()
+            self._current_focus_process = self._process_matcher.matched_app or process
             if self._status == SessionStatus.OVERLAY:
                 self._status = SessionStatus.RUNNING
                 self._overlay.hide_overlay()
                 self._emit_update()
+            return
+
+        self._current_focus_process = ""
+        self._pending_distraction = (
+            process,
+            (window_title or "").strip(),
+            (executable_path or "").strip(),
+            int(process_id or 0),
+        )
+        self._foreground_grace_timer.start()
+
+    def _cancel_pending_distraction(self) -> None:
+        self._foreground_grace_timer.stop()
+        self._pending_distraction = None
+
+    def _enforce_pending_distraction(self) -> None:
+        pending = self._pending_distraction
+        self._pending_distraction = None
+        if (
+            pending is None
+            or self._terminated
+            or self._status not in {SessionStatus.RUNNING, SessionStatus.OVERLAY}
+            or not self._config
+        ):
+            return
+
+        process, window_title, executable_path, process_id = pending
+        # Re-check at the enforcement boundary because a verified
+        # launcher/runtime alias may have been learned during the grace period.
+        if self._process_matcher.is_allowed(process, executable_path, process_id):
+            self._current_focus_process = self._process_matcher.matched_app or process
             return
 
         self._distractions += 1
@@ -262,7 +354,7 @@ class SessionController(QObject):
         self._distraction_events.append(
             DistractionEntry(
                 process_name=process,
-                window_title=(window_title or "").strip() or None,
+                window_title=window_title or None,
                 occurred_at=datetime.now().astimezone().isoformat(),
             )
         )
@@ -270,11 +362,22 @@ class SessionController(QObject):
         mode = self._config.mode
         if mode in {"Deep", "Standard"} and self._config.whitelist:
             self._status = SessionStatus.OVERLAY
-            self._overlay.show_overlay(
-                self._config.whitelist[0],
-                return_seconds=5 if mode == "Deep" else 3,
-                allowed_apps=list(self._config.whitelist),
-            )
+            try:
+                self._overlay.show_overlay(
+                    self._config.whitelist[0],
+                    return_seconds=5 if mode == "Deep" else 3,
+                    allowed_apps=list(self._config.whitelist),
+                    allowed_app_paths=dict(getattr(self._config, "allowed_app_paths", {})),
+                )
+            except TypeError as exc:
+                # Preserve compatibility with small overlay adapters that
+                # implement the pre-v3 two-argument interface.
+                if "allowed_apps" not in str(exc):
+                    raise
+                self._overlay.show_overlay(
+                    self._config.whitelist[0],
+                    return_seconds=5 if mode == "Deep" else 3,
+                )
         self._emit_update()
 
     def complete_session(self):
@@ -284,6 +387,7 @@ class SessionController(QObject):
         }:
             return
         self._status = SessionStatus.COMPLETED
+        self._cancel_pending_distraction()
         self._timer.stop()
         self._overlay.hide_overlay()
         record = self._save_record()
@@ -295,6 +399,20 @@ class SessionController(QObject):
             return
         self._terminated = True
         self._status = SessionStatus.TERMINATED
+        self._cancel_pending_distraction()
+        self._timer.stop()
+        self._overlay.hide_overlay()
+        self._overlay.hide_break_window()
+        record = self._save_record()
+        self.session_completed.emit(record)
+        self.tray_update.emit(False)
+
+    def finish_scheduled_session(self):
+        """Finish a schedule at its natural boundary as a completed record."""
+        if not self.is_active:
+            return
+        self._status = SessionStatus.COMPLETED
+        self._cancel_pending_distraction()
         self._timer.stop()
         self._overlay.hide_overlay()
         self._overlay.hide_break_window()
@@ -329,4 +447,15 @@ class SessionController(QObject):
             distractions=[event.__dict__.copy() for event in self._distraction_events],
             goal=self._config.goal if self._config else None,
             outcome=outcome,
+            source=getattr(self._config, "source", "timer") if self._config else "timer",
+            schedule_label=(
+                getattr(self._config, "schedule_label", "") if self._config else ""
+            ),
+            schedule_start=(
+                getattr(self._config, "schedule_start", "") if self._config else ""
+            ),
+            schedule_end=(
+                getattr(self._config, "schedule_end", "") if self._config else ""
+            ),
+            app_focus_seconds=dict(self._app_focus_seconds),
         )

@@ -14,22 +14,29 @@ import random
 from typing import Optional
 
 from PyQt6.QtCore import (
-    QElapsedTimer, QPointF, QSize, Qt, QTimer,
+    QElapsedTimer,
+    QPointF,
+    Qt,
+    QTimer,
 )
 from PyQt6.QtGui import (
-    QColor, QCursor, QPainter, QPaintEvent, QRadialGradient,
+    QColor,
+    QCursor,
+    QPainter,
+    QPaintEvent,
+    QRadialGradient,
 )
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from focus_capsule.theme import WINDOW_BG
 
 ORB_COLOURS = [
-    QColor("#5B6FE8"),
-    QColor("#3B8D75"),
-    QColor("#C88745"),
-    QColor("#7181F5"),
-    QColor("#9BB4FA"),
-    QColor("#B8C4F0"),
+    QColor("#5868D9"),
+    QColor("#3E806C"),
+    QColor("#B47A42"),
+    QColor("#7A87E8"),
+    QColor("#A8B5F0"),
+    QColor("#C5DDD4"),
 ]
 
 
@@ -96,11 +103,12 @@ class AmbientBackground(QWidget):
         self._active_fps = 30
         self._idle_fps = 18
         self._background_fps = 8
+        self._current_interval = int(1000 / self._active_fps)
         self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self._tick)
         self._elapsed_timer = QElapsedTimer()
         self._elapsed_timer.start()
-        self._frame_timer.start(int(1000 / self._active_fps))
+        self._frame_timer.start(self._current_interval)
 
         self._pointer_timer = QTimer(self)
         self._pointer_timer.setInterval(80)
@@ -123,7 +131,10 @@ class AmbientBackground(QWidget):
             self._background_fps if self._is_background
             else (self._active_fps if self._is_active else self._idle_fps)
         )
-        self._frame_timer.setInterval(int(1000 / max(1, fps)))
+        interval = int(1000 / max(1, fps))
+        if interval != self._current_interval:
+            self._current_interval = interval
+            self._frame_timer.setInterval(interval)
 
     def _populate_orbs_from_parent(self):
         w = max(1, self.parent().width() if self.parent() else 800)
@@ -155,6 +166,7 @@ class AmbientBackground(QWidget):
         parent = self.parent()
         if parent is None:
             return
+        was_active = self._is_active
         try:
             pos = parent.mapFromGlobal(QCursor.pos())
             w, h = parent.width(), parent.height()
@@ -166,12 +178,13 @@ class AmbientBackground(QWidget):
                 self._is_active = False
         except RuntimeError:
             self._is_active = False
+        if self._is_active != was_active:
+            self._adjust_fps()
 
     def _tick(self):
         sm = 0.12
         self._mouse_x += (self._target_mouse_x - self._mouse_x) * sm
         self._mouse_y += (self._target_mouse_y - self._mouse_y) * sm
-        self._adjust_fps()
         elapsed = self._elapsed_timer.elapsed() / 1000.0
         for orb in self._orbs:
             orb.update(elapsed)
@@ -218,3 +231,16 @@ class AmbientBackground(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._populate_timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._frame_timer.isActive():
+            self._elapsed_timer.restart()
+            self._frame_timer.start(self._current_interval)
+        if not self._pointer_timer.isActive():
+            self._pointer_timer.start()
+
+    def hideEvent(self, event):
+        self._frame_timer.stop()
+        self._pointer_timer.stop()
+        super().hideEvent(event)

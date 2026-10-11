@@ -7,8 +7,8 @@ compatibility with the original :mod:`focus_capsule.models`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone, timedelta
-from typing import Optional
+from datetime import date, datetime, timedelta, timezone
+from enum import Enum
 
 CST = timezone(timedelta(hours=8), name="CST")
 
@@ -97,14 +97,111 @@ class AppConfig:
 
 # ── Daily goal entry ─────────────────────────────────────────
 
+
+def _optional_non_negative_int(value) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _non_negative_int(value, default: int = 0) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return max(0, int(default))
+
+
+def _positive_int_map(value) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, int] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key).strip()
+        try:
+            number = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if key and number > 0:
+            result[key] = number
+    return result
+
+
+@dataclass
+class DailyGoalTargets:
+    """Optional, independently selectable targets for one day."""
+
+    max_distractions: int | None = None
+    total_focus_minutes: int | None = None
+    category_focus_minutes: dict[str, int] = field(default_factory=dict)
+    focus_sessions: int | None = None
+    app_usage_minutes: dict[str, int] = field(default_factory=dict)
+    category_usage_minutes: dict[str, int] = field(default_factory=dict)
+    max_temporary_unlocks: int | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.max_distractions is not None,
+                self.total_focus_minutes is not None,
+                bool(self.category_focus_minutes),
+                self.focus_sessions is not None,
+                bool(self.app_usage_minutes),
+                bool(self.category_usage_minutes),
+                self.max_temporary_unlocks is not None,
+            )
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "max_distractions": self.max_distractions,
+            "total_focus_minutes": self.total_focus_minutes,
+            "category_focus_minutes": dict(self.category_focus_minutes),
+            "focus_sessions": self.focus_sessions,
+            "app_usage_minutes": dict(self.app_usage_minutes),
+            "category_usage_minutes": dict(self.category_usage_minutes),
+            "max_temporary_unlocks": self.max_temporary_unlocks,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DailyGoalTargets":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            max_distractions=_optional_non_negative_int(data.get("max_distractions")),
+            total_focus_minutes=_optional_non_negative_int(
+                data.get("total_focus_minutes")
+            ),
+            category_focus_minutes=_positive_int_map(
+                data.get("category_focus_minutes")
+            ),
+            focus_sessions=_optional_non_negative_int(data.get("focus_sessions")),
+            app_usage_minutes=_positive_int_map(data.get("app_usage_minutes")),
+            category_usage_minutes=_positive_int_map(
+                data.get("category_usage_minutes")
+            ),
+            max_temporary_unlocks=_optional_non_negative_int(
+                data.get("max_temporary_unlocks")
+            ),
+        )
+
+
 @dataclass
 class DailyGoalEntry:
-    """Tracks the daily focus goal for a specific CST date."""
+    """Persistent task, target and aggregate state for one CST date."""
+
     date_str: str            # ISO date "2026-07-14"
-    target_minutes: int = 120
+    target_minutes: int = 0  # Legacy total-focus target.
     achieved_minutes: int = 0
     sessions_completed: int = 0
     sessions_terminated: int = 0
+    daily_goal_title: str = ""
+    daily_goal_status: str = "todo"
+    daily_goal_tasks: list[dict] = field(default_factory=list)
+    targets: DailyGoalTargets = field(default_factory=DailyGoalTargets)
 
     def to_dict(self) -> dict:
         return {
@@ -113,16 +210,96 @@ class DailyGoalEntry:
             "achieved_minutes": self.achieved_minutes,
             "sessions_completed": self.sessions_completed,
             "sessions_terminated": self.sessions_terminated,
+            "daily_goal_title": self.daily_goal_title,
+            "daily_goal_status": self.daily_goal_status,
+            "daily_goal_tasks": [dict(task) for task in self.daily_goal_tasks],
+            "targets": self.targets.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "DailyGoalEntry":
+        if not isinstance(data, dict):
+            data = {}
+        targets = DailyGoalTargets.from_dict(data.get("targets", {}))
+        # Migrate the old opt-in single duration goal only when the persisted
+        # record explicitly marked it as enabled.
+        if (
+            targets.total_focus_minutes is None
+            and bool(data.get("daily_goal_enabled", False))
+        ):
+            targets.total_focus_minutes = _optional_non_negative_int(
+                data.get("target_minutes")
+            )
+        tasks = data.get("daily_goal_tasks", [])
+        if not isinstance(tasks, list):
+            tasks = []
         return cls(
             date_str=str(data.get("date_str", "")),
-            target_minutes=int(data.get("target_minutes", 120)),
-            achieved_minutes=int(data.get("achieved_minutes", 0)),
-            sessions_completed=int(data.get("sessions_completed", 0)),
-            sessions_terminated=int(data.get("sessions_terminated", 0)),
+            target_minutes=_non_negative_int(data.get("target_minutes")),
+            achieved_minutes=_non_negative_int(data.get("achieved_minutes")),
+            sessions_completed=_non_negative_int(data.get("sessions_completed")),
+            sessions_terminated=_non_negative_int(data.get("sessions_terminated")),
+            daily_goal_title=str(data.get("daily_goal_title", "")),
+            daily_goal_status=str(data.get("daily_goal_status", "todo")),
+            daily_goal_tasks=[
+                dict(task) for task in tasks if isinstance(task, dict)
+            ],
+            targets=targets,
+        )
+
+
+@dataclass
+class DailyActivityEntry:
+    """Foreground application usage accumulated while Focus Capsule runs."""
+
+    date_str: str
+    app_usage_seconds: dict[str, int] = field(default_factory=dict)
+    app_display_names: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "date_str": self.date_str,
+            "app_usage_seconds": {
+                str(key).strip().casefold(): max(0, int(value))
+                for key, value in self.app_usage_seconds.items()
+                if str(key).strip()
+            },
+            "app_display_names": {
+                str(key).strip().casefold(): str(value).strip()
+                for key, value in self.app_display_names.items()
+                if str(key).strip() and str(value).strip()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DailyActivityEntry":
+        if not isinstance(data, dict):
+            data = {}
+        raw_usage = data.get("app_usage_seconds", {})
+        usage: dict[str, int] = {}
+        if isinstance(raw_usage, dict):
+            for process, seconds in raw_usage.items():
+                key = str(process).strip().casefold()
+                try:
+                    value = max(0, int(seconds))
+                except (TypeError, ValueError):
+                    continue
+                if key:
+                    usage[key] = value
+        raw_names = data.get("app_display_names", {})
+        names = (
+            {
+                str(process).strip().casefold(): str(name).strip()
+                for process, name in raw_names.items()
+                if str(process).strip() and str(name).strip()
+            }
+            if isinstance(raw_names, dict)
+            else {}
+        )
+        return cls(
+            date_str=str(data.get("date_str", "")),
+            app_usage_seconds=usage,
+            app_display_names=names,
         )
 
 
@@ -169,4 +346,93 @@ class DailyReport:
             top_distractions=list(data.get("top_distractions", [])),
             generated_at=str(data.get("generated_at", "")),
             source=str(data.get("source", "local")),
+        )
+
+
+# ── Precision Agent OS (daily-goal-page) models ────────────────
+
+
+class GoalStatus(str, Enum):
+    """Lifecycle of a daily goal."""
+
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    FAILED = "failed"
+
+
+@dataclass
+class TaskItem:
+    """A single task within a daily goal."""
+
+    title: str
+    priority: str = "medium"  # low | medium | high
+    status: GoalStatus = GoalStatus.TODO
+    estimated_minutes: int = 0
+    actual_minutes: int = 0
+
+
+@dataclass
+class DailyGoal:
+    """A daily goal with title, tasks, and execution metadata."""
+
+    date: str
+    title: str
+    tasks: list[TaskItem] = field(default_factory=list)
+    status: GoalStatus = GoalStatus.TODO
+    created_at: str = ""
+    completed_at: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.created_at:
+            self.created_at = datetime.now().isoformat()
+        if not self.tasks:
+            self.tasks = []
+
+    def to_dict(self) -> dict:
+        return {
+            "date": self.date,
+            "title": self.title,
+            "tasks": [
+                {
+                    "title": t.title,
+                    "priority": t.priority,
+                    "status": t.status.value if isinstance(t.status, GoalStatus) else t.status,
+                    "estimated_minutes": t.estimated_minutes,
+                    "actual_minutes": t.actual_minutes,
+                }
+                for t in self.tasks
+            ],
+            "status": self.status.value if isinstance(self.status, GoalStatus) else self.status,
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DailyGoal":
+        tasks_data = data.get("tasks", [])
+        tasks = [
+            TaskItem(
+                title=str(t.get("title", "")),
+                priority=str(t.get("priority", "medium")),
+                status=GoalStatus(t.get("status", "todo"))
+                if isinstance(t.get("status"), str)
+                else GoalStatus.TODO,
+                estimated_minutes=int(t.get("estimated_minutes", 0)),
+                actual_minutes=int(t.get("actual_minutes", 0)),
+            )
+            for t in tasks_data
+        ]
+        status_raw = data.get("status", "todo")
+        try:
+            status = GoalStatus(status_raw)
+        except ValueError:
+            status = GoalStatus.TODO
+        return cls(
+            date=str(data.get("date", "")),
+            title=str(data.get("title", "")),
+            tasks=tasks,
+            status=status,
+            created_at=str(data.get("created_at", "")),
+            completed_at=str(data.get("completed_at", "")),
         )

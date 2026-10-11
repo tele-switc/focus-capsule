@@ -1,8 +1,10 @@
 """Unit tests for the schedule_manager module."""
 
 import os
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -189,6 +191,18 @@ class ScheduleManagerTests(unittest.TestCase):
         self.assertTrue(self.manager.is_process_allowed("chrome.exe"))
         self.assertFalse(self.manager.is_process_allowed("slack.exe"))
 
+        with tempfile.TemporaryDirectory() as temporary:
+            app_root = Path(temporary) / "Vendor" / "DesktopEditors"
+            launcher = app_root / "DesktopEditors.exe"
+            foreground = app_root / "editors.exe"
+            self.manager._active_rule.whitelisted_apps = ["desktopeditors.exe"]
+            self.manager._active_rule.allowed_app_paths = {
+                "desktopeditors.exe": str(launcher)
+            }
+            self.assertTrue(
+                self.manager.is_process_allowed("editors.exe", str(foreground))
+            )
+
     def test_disabled_rule_not_enforced(self):
         rule = ScheduleRule(
             start_hour=9, start_minute=0, end_hour=10, end_minute=0,
@@ -209,6 +223,9 @@ class ScheduleRuleModelTests(unittest.TestCase):
             mode="Deep",
             enabled=True,
             label="晨间浏览",
+            allowed_app_paths={
+                "chrome.exe": r"C:\Program Files\Chrome\chrome.exe",
+            },
         )
         data = rule.to_dict()
         restored = ScheduleRule.from_dict(data)
@@ -220,6 +237,10 @@ class ScheduleRuleModelTests(unittest.TestCase):
         self.assertEqual(restored.mode, "Deep")
         self.assertTrue(restored.enabled)
         self.assertEqual(restored.label, "晨间浏览")
+        self.assertEqual(
+            restored.allowed_app_paths,
+            {"chrome.exe": r"C:\Program Files\Chrome\chrome.exe"},
+        )
 
     def test_from_dict_defaults(self):
         rule = ScheduleRule.from_dict({})

@@ -3,13 +3,14 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QRect
+from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
 
 from focus_capsule.controller import SessionUpdate
 from focus_capsule.models import FocusConfig, SessionStatus
 from focus_capsule.overlay import BreakWindow
 from focus_capsule.session_view import SessionViewWindow
-from focus_capsule.settings_panel import AppChip, IconGrid
+from focus_capsule.settings_panel import AppChip, FlowLayout, IconGrid
 from focus_capsule.styles import STYLESHEET
 
 
@@ -65,6 +66,29 @@ class UiReliabilityTests(unittest.TestCase):
         for tile in grid._tiles:
             tile.deleteLater()
         grid.close()
+
+    def test_flow_layout_can_repeatedly_measure_and_reflow(self):
+        host = QWidget()
+        layout = FlowLayout(
+            host,
+            margin=6,
+            horizontal_spacing=8,
+            vertical_spacing=10,
+        )
+        for label in ("二十五分钟", "五十分钟", "自定义时长"):
+            layout.addWidget(QPushButton(label))
+
+        measured_heights = []
+        for width in (480, 240, 480, 180, 320):
+            height = layout.heightForWidth(width)
+            measured_heights.append(height)
+            self.assertGreater(height, 0)
+            layout.setGeometry(QRect(0, 0, width, height))
+            self.app.processEvents()
+
+        self.assertGreater(measured_heights[1], measured_heights[0])
+        self.assertEqual(measured_heights[0], measured_heights[2])
+        host.close()
 
     def test_session_view_switches_between_focus_and_break_states(self):
         config = FocusConfig(

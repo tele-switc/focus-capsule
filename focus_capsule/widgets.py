@@ -13,11 +13,11 @@ class FocusRing(QWidget):
     """A calm circular progress indicator used before, during and after focus."""
 
     COLORS = {
-        "ready": QColor("#5B6FE8"),
-        "running": QColor("#5B6FE8"),
-        "break": QColor("#C88745"),
-        "complete": QColor("#3B8D75"),
-        "stopped": QColor("#D85555"),
+        "ready": QColor("#A2A4A9"),
+        "running": QColor("#5868D9"),
+        "break": QColor("#B47A42"),
+        "complete": QColor("#3E806C"),
+        "stopped": QColor("#C25C5C"),
     }
 
     def __init__(self, parent=None):

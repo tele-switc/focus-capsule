@@ -11,7 +11,6 @@ from PyQt6.QtCore import QStandardPaths
 
 from focus_capsule.models import SessionRecord
 
-
 PathLike = Union[str, os.PathLike]
 _RECORD_FIELDS = {item.name for item in fields(SessionRecord)}
 
@@ -101,8 +100,11 @@ class HistoryService:
             raise OSError("Refusing to overwrite history without a corrupt-data backup")
 
         history.append(record)
-        if len(history) > 100:
-            history = history[-100:]
+        # Keep enough detail for long-term calendar review. Ten thousand
+        # sessions covers several years for typical daily use while keeping the
+        # local JSON file bounded.
+        if len(history) > 10_000:
+            history = history[-10_000:]
         self._atomic_write([asdict(item) for item in history])
 
     def _atomic_write(self, payload):
