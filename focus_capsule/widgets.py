@@ -6,6 +6,7 @@ import math
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from focus_capsule import theme as T
 from PyQt6.QtWidgets import QLabel, QSizePolicy, QWidget
 
 
@@ -13,11 +14,12 @@ class FocusRing(QWidget):
     """A calm circular progress indicator used before, during and after focus."""
 
     COLORS = {
-        "ready": QColor("#A2A4A9"),
-        "running": QColor("#5868D9"),
-        "break": QColor("#B47A42"),
-        "complete": QColor("#3E806C"),
-        "stopped": QColor("#C25C5C"),
+        # 状态色走主题 token，深色专注模式下才不会与背景冲突
+        "ready": "RING_READY",
+        "running": "RING_RUNNING",
+        "break": "RING_BREAK",
+        "complete": "RING_COMPLETE",
+        "stopped": "RING_STOPPED",
     }
 
     def __init__(self, parent=None):
@@ -58,12 +60,12 @@ class FocusRing(QWidget):
             side - 36,
         )
 
-        track_pen = QPen(QColor("#E8E7E3"), 12)
+        track_pen = QPen(QColor(T.get("RING_TRACK")), 12)
         track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(track_pen)
         painter.drawArc(outer, 0, 360 * 16)
 
-        accent = self.COLORS[self._state]
+        accent = QColor(T.get(self.COLORS[self._state]))
         progress_pen = QPen(accent, 12)
         progress_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(progress_pen)
@@ -77,11 +79,11 @@ class FocusRing(QWidget):
             marker_x = cx + math.cos(angle) * radius
             marker_y = cy - math.sin(angle) * radius
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#17181B"))
+            painter.setBrush(QColor(T.get("TEXT_PRIMARY")))
             painter.drawEllipse(QRectF(marker_x - 3, marker_y - 3, 6, 6))
 
         text_rect = outer.adjusted(28, 48, -28, -46)
-        painter.setPen(QColor("#17181B"))
+        painter.setPen(QColor(T.get("TEXT_PRIMARY")))
         value_font = QFont(self.font())
         value_font.setPointSize(max(18, int(side * 0.095)))
         value_font.setWeight(QFont.Weight.DemiBold)
@@ -94,7 +96,7 @@ class FocusRing(QWidget):
         )
 
         caption_rect = QRectF(outer.left(), outer.center().y() + 38, outer.width(), 28)
-        painter.setPen(QColor("#ABAFB3"))
+        painter.setPen(QColor(T.get("TEXT_TERTIARY")))
         caption_font = QFont(self.font())
         caption_font.setPointSize(10)
         caption_font.setWeight(QFont.Weight.Medium)

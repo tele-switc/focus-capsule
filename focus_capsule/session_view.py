@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from focus_capsule import theme as T
 from focus_capsule.controller import SessionUpdate
 from focus_capsule.models import FocusConfig, SessionStatus
 from focus_capsule.theme import (
@@ -50,11 +51,18 @@ class SessionViewWindow(QWidget):
         self.resize(560, 680)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setStyleSheet(
-            "QMainWindow, QWidget#appWindow { background-color: rgba(250, 246, 230, 0.88); }"
-        )
+        # 背景必须跟随主题 token：专注时全局切到深色，硬编码米色会让
+        # 深色统计卡浮在浅色底上、白色标题糊成一片（真机截图实测）。
+        self._apply_shell_theme()
+        T.add_listener(self._apply_shell_theme)
         self._setup_ui()
         self._center_window()
+
+    def _apply_shell_theme(self) -> None:
+        tokens = T.current()
+        self.setStyleSheet(
+            f"QWidget#appWindow {{ background-color: {tokens['WINDOW_BG']}; }}"
+        )
 
     def _setup_ui(self):
         root = QVBoxLayout(self)

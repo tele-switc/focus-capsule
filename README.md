@@ -26,11 +26,13 @@ Windows / macOS / Android · 数据全在本地 · GPLv3
 
 ## 截图
 
-| 今日概览 | 专注时间线 |
+| 今日概览 | 活动时间线与分类占比 |
 | --- | --- |
 | ![今日概览](docs/screenshots/today.png) | ![时间线](docs/screenshots/timeline.png) |
-| **专注日历** | **接管弹层** |
-| ![日历](docs/screenshots/calendar.png) | ![弹层](docs/screenshots/overlay.png) |
+| **专注进行中（深色模式）** | **走神时的接管弹层** |
+| ![专注窗](docs/screenshots/session_dark.png) | ![弹层](docs/screenshots/overlay.png) |
+| **专注日历** | |
+| ![日历](docs/screenshots/calendar.png) | |
 
 ## 下载
 
