@@ -1455,6 +1455,7 @@ class SettingsPanel(QWidget):
         flow.addWidget(level_control)
 
         cooldown_control, cooldown_layout = self._compact_control("冷静期")
+        self._cooldown_control = cooldown_control
         self._strict_cooldown_spin = QSpinBox()
         self._strict_cooldown_spin.setObjectName("compactSpin")
         self._strict_cooldown_spin.setRange(1, 240)
@@ -1487,6 +1488,8 @@ class SettingsPanel(QWidget):
     def _sync_strict_visibility(self) -> None:
         level = self._strict_level()
         strict = level != "off"
+        # 整块（含「冷静期」标签）一起显隐，避免留下孤儿标签
+        self._cooldown_control.setVisible(strict)
         self._strict_cooldown_spin.setVisible(strict)
         self._passcode_btn.setVisible(level == "passcode")
 
