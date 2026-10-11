@@ -57,8 +57,8 @@ macOS 首次打开会被 Gatekeeper 拦下（未做 notarize）：右键 → 打
 
 所有记录写在本机用户目录的 JSON 文件里，没有账号、没有服务器、没有遥测。卸载即清空。
 
-- Windows：`%LOCALAPPDATA%\FocusCapsule\`
-- macOS / Linux：`~/.local/share/FocusCapsule/`
+- Windows：`%APPDATA%\FocusCapsule\Focus Capsule\`（会话历史、每日目标、活动统计、事件区间）；另有 `%LOCALAPPDATA%\FocusCapsule\clock_guard.json` 用于改时间检测
+- macOS / Linux：`~/Library/Application Support/FocusCapsule/Focus Capsule/` 与 `~/.local/share/FocusCapsule/Focus Capsule/`
 
 ## 从源码运行
 
