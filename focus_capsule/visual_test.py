@@ -19,8 +19,10 @@ from __future__ import annotations
 import os
 import random
 import sys
+import tempfile
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 # Must be set before importing focus_capsule modules
 os.environ["FOCUS_CAPSULE_VISUAL_TEST"] = "1"
@@ -94,6 +96,19 @@ def _apply_app_font(app: QApplication) -> None:
     font.setPointSize(13 if sys.platform == "darwin" else (10 if sys.platform == "win32" else 11))
     font.setStyleHint(QFont.StyleHint.SansSerif)
     app.setFont(font)
+
+
+# ------------------------------------------------------------------
+# 视觉测试专用数据目录：与真实用户历史完全隔离。
+# 此前演示数据会不断追加进共享 history.json，导致每次截图数据不一致、
+# 页面越来越慢，并污染真实记录。
+# ------------------------------------------------------------------
+
+_VT_DATA_DIR = Path(
+    os.environ.get("FOCUS_CAPSULE_VISUAL_DATA_DIR")
+    or (Path(tempfile.gettempdir()) / "focus-capsule-visual-data")
+)
+_VT_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ------------------------------------------------------------------
@@ -171,7 +186,7 @@ def _inject_demo_events():
     """写入今天的演示前台区间事件 + daily_activity 秒数，供时间线/占比/排行展示。"""
     from focus_capsule.activity_events import ActivityEventLog, AFK_PROCESS
 
-    store = DataStore()
+    store = DataStore(_VT_DATA_DIR)
     log = ActivityEventLog(store.base_dir)
     today = date.today()
     base = datetime.combine(today, datetime.min.time()).astimezone()
@@ -184,7 +199,7 @@ def _inject_demo_events():
         ("code.exe", "activity_tracker.py — focus_capsule", 10.0, 80),
         ("excel.exe", "季度报表.xlsx", 11.5, 55),
         ("chrome.exe", "MDN Web Docs", 13.6, 40),
-        ("code.exe", "timeline_view.py — focus_capsule", 14.4, 110),
+        ("code.exe", "专注舱 — Visual Studio Code", 14.4, 110),
         ("obsidian.exe", "工作笔记", 17.2, 30),
         ("potplayer64.exe", "纪录片.mp4", 20.1, 65),
     ]
@@ -211,8 +226,12 @@ def _inject_demo_events():
 
 
 def _inject_demo_data():
-    """Insert demo records into the history DB."""
-    history = HistoryService()
+    """Insert demo records into the visual-test history DB.
+
+    先清空隔离目录里的旧演示数据，保证每轮截图的数据集确定一致。
+    """
+    history = HistoryService(_VT_DATA_DIR / "history.json")
+    history.clear_history()
     records = _create_demo_records()
     for rec in records:
         history.save_record(rec)
@@ -243,11 +262,11 @@ class VisualTestMainWindow(QWidget):
         self.setMinimumSize(1024, 700)
         print("VTM resize done", flush=True)
 
-        self._data_store = DataStore()
+        self._data_store = DataStore(_VT_DATA_DIR)
         print("VTM data_store done", flush=True)
         self._app_config = self._data_store.load_app_config()
         print("VTM app_config done", flush=True)
-        self._history_service = HistoryService()
+        self._history_service = HistoryService(_VT_DATA_DIR / "history.json")
         print("VTM history done", flush=True)
         self._trend_service = TrendService(self._history_service, self._app_config)
         print("VTM trend done", flush=True)

@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("FOCUS_CAPSULE_VISUAL_TEST", "1")
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# offscreen 平台在本机没有 CJK 字体库，截图会变成豆腐块；
+# 有桌面会话时用 windows 平台真实渲染， grab 仍然走离屏位图。
+os.environ.setdefault("QT_QPA_PLATFORM", "windows")
 
 OUT = ROOT / "docs" / "screenshots"
 TMP = Path(os.environ.get("TEMP", "/tmp")) / "focus_capsule_readme_shots"
@@ -25,7 +27,6 @@ PAGES = {
     "today": "pa_today_1440x900.png",
     "timeline": "pa_trend_1440x900.png",
     "calendar": "pa_calendar_1440x900.png",
-    "plan": "pa_shell_1440x900.png",
 }
 
 
@@ -59,6 +60,17 @@ def capture_dialogs() -> list[tuple[str, object]]:
 
     app = QApplication.instance() or QApplication([])
     shots: list[tuple[str, object]] = []
+    # 不真正显示到桌面：WA_DontShowOnScreen 仍可渲染成位图
+    from PyQt6.QtWidgets import QWidget as _QW
+
+    _orig_show = _QW.show
+
+    def _show_without_screen(self):
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        _orig_show(self)
+
+    _QW.show = _show_without_screen
+    from PyQt6.QtCore import Qt  # noqa: F401
 
     overlay = OverlayWindow(
         return_seconds=5,
@@ -67,8 +79,9 @@ def capture_dialogs() -> list[tuple[str, object]]:
         strict=False,
         snooze_used=0,
         snooze_quota=2,
+        title_text="这不在本轮专注计划中",
+        subtitle_text="请切回 VS Code，继续刚才的目标",
     )
-    overlay.subtitle_for_capture("请切回 VS Code，继续刚才的目标")
     overlay.resize(1180, 760)
     overlay.show()
     app.processEvents()

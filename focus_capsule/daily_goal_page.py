@@ -375,6 +375,8 @@ class DailyGoalPage(QWidget):
             empty_layout = QVBoxLayout(empty)
             empty_layout.setContentsMargins(18, 18, 18, 18)
             empty_layout.setSpacing(4)
+            # 面板被卡片撑高时，文字组垂直居中，避免顶部悬空
+            empty_layout.addStretch()
 
             empty_title = QLabel("还没有任务")
             empty_title.setObjectName("summaryGoal")

@@ -1,4 +1,4 @@
-"""PRECISION AGENT OS — Trends as professional data terminal.
+"""数据趋势页 — 时间线、分类占比与连续记录。
 
 Continuous line chart with area fill, crosshair, interactive tooltip.
 Selectable time ranges (7D / 30D / 90D / 6M / 1Y / ALL).
@@ -181,10 +181,11 @@ class LineChartWidget(QWidget):
         fill_path.lineTo(pts[-1][0], pad_t + chart_h)
         fill_path.closeSubpath()
         gradient = QLinearGradient(0, pad_t, 0, pad_t + chart_h)
-        fill_top = QColor(t["CHART_FILL"])
-        fill_top.setAlphaF(0.72)
-        fill_bottom = QColor(t["CHART_FILL"])
-        fill_bottom.setAlphaF(0.08)
+        # 淡色渐变填充（顶部 16% → 底部 3%），避免大面积饱和色块
+        fill_top = QColor(t["CHART_PRIMARY"])
+        fill_top.setAlphaF(0.16)
+        fill_bottom = QColor(t["CHART_PRIMARY"])
+        fill_bottom.setAlphaF(0.03)
         gradient.setColorAt(0, fill_top)
         gradient.setColorAt(1, fill_bottom)
         p.fillPath(fill_path, QBrush(gradient))

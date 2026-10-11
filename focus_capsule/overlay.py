@@ -377,12 +377,14 @@ class OverlayWindow(QWidget):
         if self._can_snooze():
             self._snooze_btn = QPushButton(f"延后 {SNOOZE_MINUTES} 分钟")
             self._snooze_btn.setObjectName("overlayGhostButton")
+            self._snooze_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self._snooze_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._snooze_btn.setStyleSheet(self._ghost_style())
             self._snooze_btn.clicked.connect(self._request_snooze)
             actions.addWidget(self._snooze_btn)
         back = QPushButton("返回专注")
         back.setObjectName("overlayPrimaryButton")
+        back.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.setStyleSheet(self._primary_style())
         back.setDefault(True)
@@ -423,7 +425,6 @@ class OverlayWindow(QWidget):
         self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._fade.start()
         self._fade.finished.connect(self._fade.deleteLater)
-        QTimer.singleShot(0, self._focus_default)
 
     # -- presentation helpers -------------------------------------------
 
@@ -472,21 +473,9 @@ class OverlayWindow(QWidget):
             f"QPushButton:hover{{background:{hex_alpha(ACCENT, 0.06)};color:{TEXT_PRIMARY};}}"
         )
 
-    def _focus_default(self):
-        """把键盘焦点交给「返回专注」，让 Enter/Esc 立即可用。
-
-        offscreen 平台（CI 与截图自检）里对半透明无边框 Tool 窗的子控件调用
-        setFocus 会直接段错误，因此只在真实桌面平台上执行。
-        """
-
-        app = QApplication.instance()
-        if app is not None and app.platformName() == "offscreen":
-            return
-        target = self._snooze_btn if self._snooze_btn is not None else None
-        if target is None:
-            target = self.findChild(QPushButton, "overlayPrimaryButton")
-        if target is not None:
-            target.setFocus(Qt.FocusPolicy.OtherFocusReason)
+    # 键盘可达性走窗口级 keyPressEvent：对半透明无边框 Tool 窗的子控件调用
+    # setFocus() 会让进程直接段错误（offscreen 与真实桌面平台均复现），
+    # 因此这里不给按钮抢焦点，Enter/Esc 由本窗口的 keyPressEvent 处理。
 
     # -- behaviour --------------------------------------------------------
 
