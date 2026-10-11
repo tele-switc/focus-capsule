@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+from focus_capsule.activity_events import AFK_PROCESS, ActivityEventLog
+from focus_capsule.app_categories import category_for_process
 from focus_capsule.data_models import china_today
 from focus_capsule.history_db import HistoryService
 from focus_capsule.models import SessionRecord
@@ -59,6 +61,20 @@ class CategorySummary:
 
 
 @dataclass
+class RangeSummary:
+    """任意日期区间的聚合结果（周/月视图使用）。"""
+
+    start_date: date
+    end_date: date
+    days: list[DaySummary] = field(default_factory=list)
+    total_focus_seconds: int = 0
+    day_count: int = 0
+    avg_daily_minutes: float = 0.0
+    completion_rate: float = 0.0
+    category_top5: list[CategorySummary] = field(default_factory=list)
+
+
+@dataclass
 class TrendReport:
     days: list[DaySummary] = field(default_factory=list)
     total_focus_seconds: int = 0
@@ -73,12 +89,24 @@ class TrendReport:
 class TrendService:
     """Computes trend analytics from session history."""
 
-    def __init__(self, history: HistoryService, app_config=None):
+    def __init__(self, history: HistoryService, app_config=None, data_store=None):
         self._history = history
         self._app_config = app_config
+        self._data_store = data_store
 
     def set_app_config(self, app_config) -> None:
         self._app_config = app_config
+
+    def _store(self):
+        """惰性获取 DataStore（老调用方未注入时走默认数据目录）。"""
+        if self._data_store is None:
+            from focus_capsule.data_store import DataStore
+
+            self._data_store = DataStore()
+        return self._data_store
+
+    def _event_log(self) -> ActivityEventLog:
+        return ActivityEventLog(self._store().base_dir)
 
     def _categorize(self, process_name: str) -> str:
         if self._app_config and self._app_config.app_categories:
@@ -194,3 +222,206 @@ class TrendService:
                 s.distraction_count += r.distraction_count
                 s.esc_used += r.esc_used
         return s
+
+    # ── 区间聚合（新代码统一本地时区，不改老函数行为）──────────
+
+    @staticmethod
+    def _record_local_date(record: SessionRecord) -> Optional[date]:
+        """把会话开始时间映射到本地日期；naive 时间按本地时区解释。"""
+        try:
+            started = datetime.fromisoformat(record.started_at)
+            if started.tzinfo is None:
+                started = started.astimezone()
+            return started.astimezone().date()
+        except (TypeError, ValueError):
+            return None
+
+    def _records_in_range(
+        self, start_date: date, end_date: date
+    ) -> list[SessionRecord]:
+        result = []
+        for r in self._history.load_history():
+            d = self._record_local_date(r)
+            if d and start_date <= d <= end_date:
+                result.append(r)
+        return result
+
+    def get_range_summary(self, start_date: date, end_date: date) -> RangeSummary:
+        """聚合 [start_date, end_date] 闭区间的会话统计。"""
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+        records = self._records_in_range(start_date, end_date)
+
+        by_date: dict[date, DaySummary] = {}
+        day = start_date
+        while day <= end_date:
+            by_date[day] = DaySummary(date=day)
+            day += timedelta(days=1)
+
+        for r in records:
+            d = self._record_local_date(r)
+            if not d or d not in by_date:
+                continue
+            s = by_date[d]
+            s.total_focus_seconds += max(0, r.actual_focus_seconds)
+            s.session_count += 1
+            if r.outcome == "completed":
+                s.completed_count += 1
+            elif r.outcome == "terminated":
+                s.terminated_count += 1
+            s.distraction_count += r.distraction_count
+            s.esc_used += r.esc_used
+
+        days = list(by_date.values())
+        total = sum(s.total_focus_seconds for s in days)
+        sessions = sum(s.session_count for s in days)
+        completed = sum(s.completed_count for s in days)
+        day_count = len(days)
+        share = self.get_category_share(start_date, end_date)
+        top5 = [
+            CategorySummary(
+                category=item["category"],
+                total_focus_seconds=item["seconds"],
+                app_count=item["app_count"],
+            )
+            for item in share[:5]
+        ]
+        return RangeSummary(
+            start_date=start_date,
+            end_date=end_date,
+            days=days,
+            total_focus_seconds=total,
+            day_count=day_count,
+            avg_daily_minutes=total / max(1, day_count) / 60.0,
+            completion_rate=completed / sessions if sessions else 0.0,
+            category_top5=top5,
+        )
+
+    def _activity_seconds_by_app(
+        self, start_date: date, end_date: date
+    ) -> tuple[dict[str, int], dict[str, str]]:
+        """从 daily_activity.json 汇总区间内每个进程的秒数与显示名。"""
+        seconds: dict[str, int] = {}
+        names: dict[str, str] = {}
+        try:
+            entries = self._store().load_all_activity()
+        except OSError:
+            return seconds, names
+        day = start_date
+        while day <= end_date:
+            entry = entries.get(day.isoformat())
+            if entry is not None:
+                for process, value in entry.app_usage_seconds.items():
+                    seconds[process] = seconds.get(process, 0) + max(0, int(value))
+                names.update(entry.app_display_names)
+            day += timedelta(days=1)
+        return seconds, names
+
+    def get_daily_activity_seconds(
+        self, start_date: date, end_date: date
+    ) -> list[tuple[date, int]]:
+        """区间内每天的前台总秒数（来自 daily_activity.json），供柱状图。"""
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+        try:
+            entries = self._store().load_all_activity()
+        except OSError:
+            entries = {}
+        result: list[tuple[date, int]] = []
+        day = start_date
+        while day <= end_date:
+            entry = entries.get(day.isoformat())
+            total = sum(max(0, int(v)) for v in entry.app_usage_seconds.values()) if entry else 0
+            result.append((day, total))
+            day += timedelta(days=1)
+        return result
+
+    def get_app_usage_ranking(
+        self, start_date: date, end_date: date
+    ) -> list[dict]:
+        """区间内按应用累计前台秒数排行（含分类与占比）。"""
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+        seconds, names = self._activity_seconds_by_app(start_date, end_date)
+        total = sum(seconds.values())
+        ranking = []
+        for process, value in sorted(seconds.items(), key=lambda x: -x[1]):
+            ranking.append(
+                {
+                    "process": process,
+                    "display_name": names.get(process) or process,
+                    "category": self._category_for(process),
+                    "seconds": value,
+                    "ratio": value / total if total else 0.0,
+                }
+            )
+        return ranking
+
+    def _category_for(self, process: str) -> str:
+        if self._app_config is not None:
+            return category_for_process(self._app_config, process)
+        from focus_capsule.app_categories import infer_app_category
+
+        return infer_app_category(process)
+
+    def get_category_share(
+        self, start_date: date, end_date: date
+    ) -> list[dict]:
+        """区间内按分类聚合前台时间占比（分类在查询时现算，不落库）。"""
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+        seconds, _names = self._activity_seconds_by_app(start_date, end_date)
+        by_cat: dict[str, int] = defaultdict(int)
+        apps_per_cat: dict[str, set] = defaultdict(set)
+        for process, value in seconds.items():
+            cat = self._category_for(process)
+            by_cat[cat] += value
+            apps_per_cat[cat].add(process)
+        total = sum(by_cat.values())
+        result = []
+        for cat, value in sorted(by_cat.items(), key=lambda x: -x[1]):
+            result.append(
+                {
+                    "category": cat,
+                    "seconds": value,
+                    "ratio": value / total if total else 0.0,
+                    "app_count": len(apps_per_cat[cat]),
+                }
+            )
+        return result
+
+    def get_day_events(self, day: date) -> list[dict]:
+        """读取某天的前台切换区间事件（含 AFK 段），裁剪并合并。"""
+        try:
+            events = self._event_log().read_events(day)
+        except OSError:
+            events = []
+        window_start = datetime.combine(day, datetime.min.time()).astimezone()
+        window_end = (window_start + timedelta(days=1)).replace(microsecond=0)
+        from focus_capsule.activity_events import merge_adjacent
+
+        clamped = ActivityEventLog.clamp_events(events, window_start, window_end)
+        foreground = merge_adjacent(
+            [ev for ev in clamped if ev["process"] != "__afk__"]
+        )
+        afk = [ev for ev in clamped if ev["process"] == "__afk__"]
+
+        # 查询时现算分类与显示名，供时间线取色/标注（不落库）
+        display_names: dict[str, str] = {}
+        try:
+            entry = self._store().get_activity(day.isoformat())
+            display_names = dict(entry.app_display_names)
+        except OSError:
+            pass
+        result: list[dict] = []
+        for ev in foreground:
+            item = dict(ev)
+            item["display_name"] = display_names.get(ev["process"], "")
+            item["category"] = self._category_for(ev["process"])
+            result.append(item)
+        for ev in afk:
+            item = dict(ev)
+            item["display_name"] = "离开"
+            item["category"] = AFK_PROCESS
+            result.append(item)
+        return result

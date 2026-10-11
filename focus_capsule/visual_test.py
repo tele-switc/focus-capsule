@@ -1,4 +1,4 @@
-"""Visual-test entry point for Focus Capsule PRECISION AGENT OS.
+"""Visual-test entry point for Focus Capsule.
 
 Launches a stripped-down MainWindow with no background services,
 injects deterministic demo data, and captures screenshots.
@@ -80,6 +80,23 @@ else:
 
 
 # ------------------------------------------------------------------
+# 应用级字体：与 app.py 保持一致，显式设置可用字体链，避免中文豆腐块
+# ------------------------------------------------------------------
+
+def _apply_app_font(app: QApplication) -> None:
+    font = QFont()
+    font.setFamilies([
+        "Microsoft YaHei UI",
+        "Segoe UI",
+        "PingFang SC",
+        "Noto Sans CJK SC",
+    ])
+    font.setPointSize(13 if sys.platform == "darwin" else (10 if sys.platform == "win32" else 11))
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    app.setFont(font)
+
+
+# ------------------------------------------------------------------
 # Deterministic demo data generator
 # ------------------------------------------------------------------
 
@@ -150,12 +167,59 @@ def _create_demo_records():
     return records
 
 
+def _inject_demo_events():
+    """写入今天的演示前台区间事件 + daily_activity 秒数，供时间线/占比/排行展示。"""
+    from focus_capsule.activity_events import ActivityEventLog, AFK_PROCESS
+
+    store = DataStore()
+    log = ActivityEventLog(store.base_dir)
+    today = date.today()
+    base = datetime.combine(today, datetime.min.time()).astimezone()
+
+    # (进程, 标题, 起始小时, 时长分钟)——含午休/晚间长空隙（AFK 底纹来源）
+    segments = [
+        ("chrome.exe", "Gmail - Inbox", 7.5, 35),
+        ("code.exe", "trend_service.py — focus_capsule", 8.2, 95),
+        ("wechat.exe", "微信", 9.8, 12),
+        ("code.exe", "activity_tracker.py — focus_capsule", 10.0, 80),
+        ("excel.exe", "季度报表.xlsx", 11.5, 55),
+        ("chrome.exe", "MDN Web Docs", 13.6, 40),
+        ("code.exe", "timeline_view.py — focus_capsule", 14.4, 110),
+        ("obsidian.exe", "工作笔记", 17.2, 30),
+        ("potplayer64.exe", "纪录片.mp4", 20.1, 65),
+    ]
+    totals: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for process, title, hour, minutes in segments:
+        start = base + timedelta(hours=hour)
+        end = start + timedelta(minutes=minutes)
+        log.append_event(process, title, start, end)
+        totals[process] = totals.get(process, 0) + minutes * 60
+        display[process] = title.split(" — ")[0] if " — " in title else process
+    # 显式一段午休 AFK 事件（验证灰色底纹的两种来源）
+    log.append_event(AFK_PROCESS, "离开", base + timedelta(hours=12.2),
+                     base + timedelta(hours=13.3))
+
+    for day_off in range(6):
+        d = (today - timedelta(days=day_off)).isoformat()
+        entry = store.get_activity(d)
+        factor = 1.0 if day_off == 0 else random.Random(day_off).uniform(0.4, 1.2)
+        for process, secs in totals.items():
+            entry.app_usage_seconds[process] = int(secs * factor * 0.8)
+            entry.app_display_names.setdefault(process, display[process])
+        store.save_activity(entry)
+
+
 def _inject_demo_data():
     """Insert demo records into the history DB."""
     history = HistoryService()
     records = _create_demo_records()
     for rec in records:
         history.save_record(rec)
+    try:
+        _inject_demo_events()
+    except Exception as e:  # 演示数据失败不阻塞截图
+        print(f"demo events skipped: {e}", flush=True)
 
 
 # ------------------------------------------------------------------
@@ -328,7 +392,7 @@ class VisualTestMainWindow(QWidget):
         layout.addLayout(brand_row)
         layout.addSpacing(28)
 
-        section_label = QLabel("工作区")
+        section_label = QLabel("专注空间")
         section_label.setObjectName("navSectionLabel")
         layout.addWidget(section_label)
         layout.addSpacing(4)
@@ -339,11 +403,11 @@ class VisualTestMainWindow(QWidget):
         nav_icons = ["◈", "◎", "◷", "▦", "⌁"]
         nav_labels = ["今日概览", "专注计划", "日程锁定", "专注日历", "数据趋势"]
         nav_tooltips = [
-            "\u4eca\u65e5 \u00b7 Agent \u6267\u884c\u5de5\u4f5c\u533a",
-            "\u4e13\u6ce8\u8ba1\u5212",
-            "\u65e5\u7a0b\u9501\u5b9a",
-            "\u65e5\u5386",
-            "\u8d8b\u52bf",
+            "今日 · 任务与进展",
+            "专注计划",
+            "日程锁定",
+            "日历",
+            "趋势",
         ]
 
         for idx in range(5):
@@ -417,7 +481,7 @@ class VisualTestMainWindow(QWidget):
         self._page_title_label.setObjectName("pageTitle")
         title_box.addWidget(self._page_title_label)
 
-        self._page_subtitle_label = QLabel("Agent \u6267\u884c\u5de5\u4f5c\u533a")
+        self._page_subtitle_label = QLabel("今天的任务与专注进展")
         self._page_subtitle_label.setObjectName("pageSubtitle")
         title_box.addWidget(self._page_subtitle_label)
 
@@ -449,11 +513,11 @@ class VisualTestMainWindow(QWidget):
 
     def _update_page_header(self, page_id: int) -> None:
         page_titles = {
-            0: ("\u4eca\u65e5", "Agent \u6267\u884c\u5de5\u4f5c\u533a"),
-            1: ("\u4e13\u6ce8\u8ba1\u5212", "\u914d\u7f6e\u4e13\u6ce8\u4f1a\u8bdd"),
-            2: ("\u65e5\u7a0b\u9501\u5b9a", "\u81ea\u52a8\u5316\u65f6\u95f4\u89c4\u5219"),
-            3: ("\u65e5\u5386", "\u6bcf\u65e5\u4e13\u6ce8\u8bb0\u5f55"),
-            4: ("\u8d8b\u52bf", "\u4e13\u6ce8\u6570\u636e\u5206\u6790"),
+            0: ("今日", "今天的任务与专注进展"),
+            1: ("专注计划", "配置专注会话"),
+            2: ("日程锁定", "自动化时间规则"),
+            3: ("日历", "每日专注记录"),
+            4: ("趋势", "专注数据分析"),
         }
         title, subtitle = page_titles.get(page_id, ("", ""))
         self._page_title_label.setText(title)
@@ -505,17 +569,7 @@ def _capture_page(page_idx: int, res_w: int, res_h: int, page_name: str, out_dir
         app = _QApp([sys.argv[0]])
 
     app.setStyleSheet(_build_stylesheet())
-
-    # Configure font
-    if sys.platform == "darwin":
-        fam, pts = "PingFang SC", 13
-    elif sys.platform == "win32":
-        fam, pts = "Microsoft YaHei UI", 10
-    else:
-        fam, pts = "Noto Sans CJK SC", 11
-    font = QFont(fam, pts)
-    font.setStyleHint(QFont.StyleHint.SansSerif)
-    app.setFont(font)
+    _apply_app_font(app)
 
     win = VisualTestMainWindow(page_idx)
     win.resize(res_w, res_h)
@@ -577,10 +631,10 @@ def _run_screenshots(out_dir: str):
     """Capture all 4 target pages at 3 resolutions."""
     resolutions = [(1366, 768), (1440, 900), (1536, 1024)]
     pages = [
-        (0, "shell", "Application shell"),
-        (0, "today", "Today Agent workspace"),
-        (3, "calendar", "Calendar with populated data"),
-        (4, "trend", "Trends data terminal"),
+        (0, "shell", "应用外壳"),
+        (0, "today", "今日页"),
+        (3, "calendar", "日历页（含演示数据）"),
+        (4, "trend", "趋势页（含演示数据）"),
     ]
 
     print(f"\n{'='*60}", flush=True)
@@ -625,16 +679,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyleSheet(_build_stylesheet())
-
-    if sys.platform == "darwin":
-        fam, pts = "PingFang SC", 13
-    elif sys.platform == "win32":
-        fam, pts = "Microsoft YaHei UI", 10
-    else:
-        fam, pts = "Noto Sans CJK SC", 11
-    font = QFont(fam, pts)
-    font.setStyleHint(QFont.StyleHint.SansSerif)
-    app.setFont(font)
+    _apply_app_font(app)
 
     win = VisualTestMainWindow(page_idx)
     win.resize(1440, 900)

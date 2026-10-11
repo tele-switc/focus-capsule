@@ -58,6 +58,11 @@ class DataStore:
         self._goals_path = self._base / "daily_goals.json"
         self._activity_path = self._base / "daily_activity.json"
 
+    @property
+    def base_dir(self) -> Path:
+        """用户数据目录（与 JSON 数据文件同级），供事件日志等复用。"""
+        return self._base
+
     # ── AppConfig (QSettings) ────────────────────────────────
 
     def load_app_config(self) -> AppConfig:

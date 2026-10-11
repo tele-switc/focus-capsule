@@ -8,6 +8,7 @@ One hero metric, one comparison line, Agent insight below.
 from __future__ import annotations
 
 import math
+from datetime import date, datetime, timedelta
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import (
@@ -24,16 +25,27 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from focus_capsule import theme as T
+from focus_capsule.timeline_view import (
+    DayBarChartWidget,
+    TimelineView,
+    category_color,
+    format_seconds,
+)
 from focus_capsule.trend_service import DaySummary, TrendReport, TrendService
 
 RANGE_LABELS = ["7D", "30D", "90D", "6M", "1Y", "ALL"]
 RANGE_DAYS = {"7D": 7, "30D": 30, "90D": 90, "6M": 180, "1Y": 365, "ALL": 3650}
+
+# 日 / 周 / 月视图切换（时间线 + 分类占比 + 应用排行随其聚合）
+VIEW_LABELS = ["日", "周", "月"]
+VIEW_DAYS = {"日": 1, "周": 7, "月": 30}
 
 METRICS = [
     ("focus_time", "实际专注时间", "分钟"),
@@ -284,6 +296,7 @@ class TrendPage(QWidget):
         self._trend = trend_service
         self._range_idx = 0
         self._metric_idx = 0
+        self._view_idx = 0
         self._setup_ui()
         self.refresh()
 
@@ -295,6 +308,26 @@ class TrendPage(QWidget):
         # ── Time range segmented control ───────────────────────
         controls_row = QHBoxLayout()
         controls_row.setSpacing(0)
+
+        # 日/周/月视图切换
+        view_seg = QFrame()
+        view_seg.setObjectName("segmentedControl")
+        view_layout = QHBoxLayout(view_seg)
+        view_layout.setContentsMargins(2, 2, 2, 2)
+        view_layout.setSpacing(0)
+        self._view_btns = []
+        for i, label in enumerate(VIEW_LABELS):
+            btn = QPushButton(label)
+            btn.setObjectName("segmentedBtn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            if i == 0:
+                btn.setChecked(True)
+            btn.clicked.connect(lambda checked, idx=i: self._set_view(idx))
+            view_layout.addWidget(btn)
+            self._view_btns.append(btn)
+        controls_row.addWidget(view_seg)
+        controls_row.addSpacing(16)
 
         # Range selector
         range_seg = QFrame()
@@ -388,7 +421,75 @@ class TrendPage(QWidget):
         chart_layout.addWidget(self._chart, 3)
 
         chart_panel_layout.addLayout(chart_layout)
-        layout.addWidget(chart_panel, 1)
+
+        # ── 时间线 / 按天柱状 ───────────────────────────────────
+        timeline_panel = QFrame()
+        timeline_panel.setObjectName("sectionCard")
+        timeline_col = QVBoxLayout(timeline_panel)
+        timeline_col.setContentsMargins(24, 18, 24, 16)
+        timeline_col.setSpacing(10)
+
+        timeline_head = QHBoxLayout()
+        self._timeline_title = QLabel("活动时间线")
+        self._timeline_title.setObjectName("eyebrow")
+        timeline_head.addWidget(self._timeline_title)
+        timeline_head.addStretch()
+        self._range_summary_label = QLabel("")
+        self._range_summary_label.setStyleSheet(
+            f"color:{T.get('TEXT_SECONDARY')}; font-size:13px;"
+        )
+        timeline_head.addWidget(self._range_summary_label)
+        timeline_col.addLayout(timeline_head)
+
+        self._timeline = TimelineView()
+        self._timeline.event_clicked.connect(self._on_event_clicked)
+        timeline_col.addWidget(self._timeline)
+
+        self._day_bars = DayBarChartWidget()
+        self._day_bars.setVisible(False)
+        timeline_col.addWidget(self._day_bars)
+
+        self._insight_text_tiny = QLabel("")
+        self._insight_text_tiny.setStyleSheet(
+            f"color:{T.get('TEXT_TERTIARY')}; font-size:12px;"
+        )
+        timeline_col.addWidget(self._insight_text_tiny)
+
+        # ── 分类占比（横向细色条）──────────────────────────────
+        share_panel = QFrame()
+        share_panel.setObjectName("sectionCard")
+        share_col = QVBoxLayout(share_panel)
+        share_col.setContentsMargins(24, 18, 24, 16)
+        share_col.setSpacing(8)
+        share_title = QLabel("分类占比")
+        share_title.setObjectName("eyebrow")
+        share_col.addWidget(share_title)
+        self._share_rows_host = QVBoxLayout()
+        self._share_rows_host.setSpacing(6)
+        share_col.addLayout(self._share_rows_host)
+        self._share_empty = QLabel("暂无分类数据")
+        self._share_empty.setStyleSheet(
+            f"color:{T.get('TEXT_TERTIARY')}; font-size:12px;"
+        )
+        share_col.addWidget(self._share_empty)
+
+        # ── 应用排行（淡色块图标）──────────────────────────────
+        rank_panel = QFrame()
+        rank_panel.setObjectName("sectionCard")
+        rank_col = QVBoxLayout(rank_panel)
+        rank_col.setContentsMargins(24, 18, 24, 16)
+        rank_col.setSpacing(8)
+        rank_title = QLabel("应用排行")
+        rank_title.setObjectName("eyebrow")
+        rank_col.addWidget(rank_title)
+        self._rank_rows_host = QVBoxLayout()
+        self._rank_rows_host.setSpacing(6)
+        rank_col.addLayout(self._rank_rows_host)
+        self._rank_empty = QLabel("暂无应用记录")
+        self._rank_empty.setStyleSheet(
+            f"color:{T.get('TEXT_TERTIARY')}; font-size:12px;"
+        )
+        rank_col.addWidget(self._rank_empty)
 
         # ── Agent insight ────────────────────────────────────────
         insight_card = QFrame()
@@ -408,7 +509,29 @@ class TrendPage(QWidget):
             f"color:{T.get('TEXT_SECONDARY')}; font-size:15px; line-height:1.6;"
         )
         insight_col.addWidget(self._insight_text)
-        layout.addWidget(insight_card)
+
+        # ── 下部内容装进滚动区，避免小窗口下互相挤压 ────────────
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(16)
+        body_layout.addWidget(chart_panel)
+        body_layout.addWidget(timeline_panel)
+        body_layout.addWidget(share_panel)
+        body_layout.addWidget(rank_panel)
+        body_layout.addWidget(insight_card)
+        body_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+        scroll.setWidget(body)
+        layout.addWidget(scroll, 1)
 
     @staticmethod
     def _compact_stat(layout: QVBoxLayout, label: str, value: str) -> QLabel:
@@ -443,10 +566,210 @@ class TrendPage(QWidget):
         self._hero_label.setText(name)
         self.refresh()
 
+    def _set_view(self, idx: int):
+        self._view_idx = idx
+        for i, btn in enumerate(self._view_btns):
+            btn.setChecked(i == idx)
+        self._refresh_bottom()
+
+    @staticmethod
+    def _clear_layout(layout) -> None:
+        """清空动态行容器里的旧控件。"""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+    def _on_event_clicked(self, event: dict) -> None:
+        """点击时间线某段：详情回调（当前写入底部提示行）。"""
+        dur = format_seconds((event["end"] - event["start"]).total_seconds())
+        title = event.get("title") or ""
+        detail = (
+            f"已选中：{event.get('display_name') or event['process']}"
+            f" · {event['start'].strftime('%H:%M')}–"
+            f"{event['end'].strftime('%H:%M')} · {dur}"
+        )
+        if title:
+            detail += f" · {title[:40]}"
+        self._insight_text_tiny.setText(detail)
+
+    def _refresh_bottom(self) -> None:
+        """按日/周/月视图刷新：时间线、聚合摘要、分类占比、应用排行。"""
+        view = VIEW_LABELS[self._view_idx]
+        days = VIEW_DAYS[view]
+        today = datetime.now().astimezone().date()
+        start = today - timedelta(days=days - 1)
+
+        # ── 时间线 / 按天柱状 ──
+        if view == "日":
+            self._timeline.setVisible(True)
+            self._day_bars.setVisible(False)
+            self._timeline_title.setText("活动时间线 · 今天（0–24 时）")
+            try:
+                events = self._trend.get_day_events(today)
+            except OSError:
+                events = []
+            self._timeline.set_day(today, events)
+        else:
+            self._timeline.setVisible(False)
+            self._day_bars.setVisible(True)
+            self._timeline_title.setText(f"按天前台时长 · {view}视图")
+            daily = self._trend.get_daily_activity_seconds(start, today)
+            self._day_bars.set_days(daily)
+
+        # ── 聚合摘要（总时长 / 日均 / 完成率 / 分类 Top5）──
+        try:
+            summary = self._trend.get_range_summary(start, today)
+            parts = [
+                f"总专注 {format_seconds(summary.total_focus_seconds)}",
+                f"日均 {summary.avg_daily_minutes:.0f} 分",
+                f"完成率 {summary.completion_rate:.0%}",
+            ]
+            top5 = summary.category_top5[:5]
+            if top5 and top5[0].total_focus_seconds:
+                share = self._trend.get_category_share(start, today)
+                total = sum(item["seconds"] for item in share) or 1
+                top_txt = "、".join(
+                    f"{c.category} {c.total_focus_seconds / total:.0%}"
+                    for c in top5
+                )
+                parts.append(f"分类 Top5：{top_txt}")
+            self._range_summary_label.setText("  ·  ".join(parts))
+        except OSError:
+            self._range_summary_label.setText("")
+
+        # ── 分类占比：横向细色条 + 百分比 ──
+        self._clear_layout(self._share_rows_host)
+        share = self._trend.get_category_share(start, today)
+        if not share:
+            self._share_empty.setVisible(True)
+            self._share_rows_host.addWidget(self._share_empty)
+        else:
+            self._share_empty.setVisible(False)
+            max_ratio = max(item["ratio"] for item in share) or 1.0
+            for item in share[:8]:
+                self._share_rows_host.addWidget(
+                    self._make_share_row(item["category"], item["ratio"], max_ratio)
+                )
+
+        # ── 应用排行：淡色块图标 + 名称 + 时长 ──
+        self._clear_layout(self._rank_rows_host)
+        ranking = self._trend.get_app_usage_ranking(start, today)
+        if not ranking:
+            self._rank_empty.setVisible(True)
+            self._rank_rows_host.addWidget(self._rank_empty)
+        else:
+            self._rank_empty.setVisible(False)
+            for item in ranking[:10]:
+                self._rank_rows_host.addWidget(
+                    self._make_rank_row(
+                        item["display_name"], item["category"],
+                        item["seconds"], item["ratio"],
+                    )
+                )
+
+    def _make_share_row(self, category: str, ratio: float, max_ratio: float) -> QWidget:
+        """一条细色条表示分类占比；淡色、不饱和填充。"""
+        t = T.current()
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(10)
+        name = QLabel(category)
+        name.setFixedWidth(72)
+        name.setStyleSheet(
+            f"color:{T.get('TEXT_SECONDARY')}; font-size:12px;"
+        )
+        track = QFrame()
+        track.setFixedHeight(6)
+        track.setMinimumWidth(80)
+        track.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        track.setStyleSheet(
+            f"background:{T.get('BORDER_SUBTLE')}; border-radius:3px;"
+        )
+        inner = QHBoxLayout(track)
+        inner.setContentsMargins(0, 0, 0, 0)
+        fill = QFrame()
+        colour = category_color(category, 0.55)
+        fill.setFixedHeight(6)
+        fill.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # 宽度按相对占比伸缩；父容器 resize 时至少保留 4px
+        fill.setMinimumWidth(max(4, int(160 * (ratio / max_ratio))))
+        fill.setStyleSheet(
+            f"background:{colour.name(QColor.NameFormat.HexArgb)};"
+            f" border-radius:3px;"
+        )
+        inner.addWidget(fill)
+        inner.addStretch()
+        pct = QLabel(f"{ratio:.1%}")
+        pct.setFixedWidth(52)
+        pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        pct.setStyleSheet(
+            f"color:{T.get('TEXT_PRIMARY')}; font-size:12px;"
+            f" font-family:{T.FONT_FAMILY_NUM};"
+        )
+        h.addWidget(name)
+        h.addWidget(track, 1)
+        h.addWidget(pct)
+        return row
+
+    def _make_rank_row(
+        self, display_name: str, category: str, seconds: int, ratio: float
+    ) -> QWidget:
+        """应用排行一行：图标方块 = 6% 淡底 + 1px 细边框（无粗黑边）。"""
+        colour = category_color(category, 0.06)
+        border = QColor(T.get("BORDER_NORMAL"))
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(10)
+        tile = QFrame()
+        tile.setFixedSize(26, 26)
+        tile.setStyleSheet(
+            f"background:{colour.name(QColor.NameFormat.HexArgb)};"
+            f" border:1px solid {border.name(QColor.NameFormat.HexArgb)};"
+            f" border-radius:6px;"
+        )
+        tile_layout = QHBoxLayout(tile)
+        tile_layout.setContentsMargins(0, 0, 0, 0)
+        letter = QLabel((display_name or "?")[:1].upper())
+        letter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        letter.setStyleSheet(
+            f"color:{category_color(category, 0.95).darker(120).name()};"
+            f" font-size:12px; font-weight:{T.WEIGHT_SECTION}; background:transparent;"
+            f" border:none;"
+        )
+        tile_layout.addWidget(letter)
+        name = QLabel(display_name or category)
+        name.setStyleSheet(f"color:{T.get('TEXT_PRIMARY')}; font-size:13px;")
+        cat = QLabel(category)
+        cat.setStyleSheet(f"color:{T.get('TEXT_TERTIARY')}; font-size:11px;")
+        dur = QLabel(format_seconds(seconds))
+        dur.setStyleSheet(
+            f"color:{T.get('TEXT_SECONDARY')}; font-size:12px;"
+            f" font-family:{T.FONT_FAMILY_NUM};"
+        )
+        pct = QLabel(f"{ratio:.0%}")
+        pct.setFixedWidth(40)
+        pct.setAlignment(Qt.AlignmentFlag.AlignRight)
+        pct.setStyleSheet(
+            f"color:{T.get('TEXT_TERTIARY')}; font-size:12px;"
+            f" font-family:{T.FONT_FAMILY_NUM};"
+        )
+        h.addWidget(tile)
+        h.addWidget(name)
+        h.addWidget(cat)
+        h.addStretch()
+        h.addWidget(dur)
+        h.addWidget(pct)
+        return row
+
     def refresh(self):
         days = RANGE_DAYS.get(RANGE_LABELS[self._range_idx], 7)
         report = self._trend.get_trend(days=days)
         self._chart.set_data(report.days, self._metric_idx)
+        self._refresh_bottom()
 
         # Hero metric
         key, name, unit = METRICS[self._metric_idx]
