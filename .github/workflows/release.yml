@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q --timeout=180 --timeout-method=thread
 
       - name: 安装 Inno Setup
         shell: pwsh
@@ -96,7 +96,7 @@ jobs:
       - name: 跑可靠性测试
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q --timeout=180 --timeout-method=thread
 
       - name: 构建程序与 DMG
         env:

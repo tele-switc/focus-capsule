@@ -26,6 +26,7 @@ jobs:
   windows:
     name: Windows x64 installer
     runs-on: windows-latest
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +79,7 @@ jobs:
   macos:
     name: macOS DMG
     runs-on: macos-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
