@@ -61,8 +61,9 @@ class CalendarCell(QWidget):
         self._is_selected = False
         self._in_month = True
         self._hovered = False
-        self.setMinimumSize(82, 72)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumSize(82, 64)
+        # 纵向也使用 Expanding：让 6 行格子均分卡片高度，避免底部大片竖向空白
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
 
@@ -256,15 +257,8 @@ class CalendarPage(QWidget):
             header.addWidget(button)
         left.addLayout(header)
 
-        weekday_row = QHBoxLayout()
-        weekday_row.setSpacing(0)
-        for text in WEEKDAY_LABELS:
-            label = QLabel(text)
-            label.setObjectName("hint")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            weekday_row.addWidget(label, 1)
-        left.addLayout(weekday_row)
-
+        # 星期表头与日期格子共用同一个 QGridLayout（第 0 行为表头），
+        # 保证列宽完全一致、不再整体错位；表头在 refresh() 中重建。
         self._grid = QGridLayout()
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(0)
@@ -397,6 +391,9 @@ class CalendarPage(QWidget):
         while self._grid.count():
             item = self._grid.takeAt(0)
             if item.widget():
+                # 立即 hide：deleteLater 要等事件循环，截图/快速刷新时
+                # 旧格子会残留在旧几何位置上露出半个数字
+                item.widget().hide()
                 item.widget().deleteLater()
         self._cells.clear()
         self._month_label.setText(f"{self._view_year} 年 {self._view_month} 月")
@@ -405,8 +402,18 @@ class CalendarPage(QWidget):
             self._view_year,
             self._view_month,
         )
+        # 第 0 行：星期表头，与日期格子同列同宽，左缘与格子内日期数字对齐
+        self._grid.setRowStretch(0, 0)
+        for column_index, text in enumerate(WEEKDAY_LABELS):
+            label = QLabel(text)
+            label.setObjectName("hint")
+            label.setContentsMargins(8, 0, 0, 6)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+            self._grid.addWidget(label, 0, column_index)
+
         today = china_today()
         for row_index, week in enumerate(weeks):
+            self._grid.setRowStretch(row_index + 1, 1)
             for column_index, day in enumerate(week):
                 metrics = self._metrics.get(day)
                 focus_minutes = (
@@ -433,7 +440,8 @@ class CalendarPage(QWidget):
                     day == self._selected_date,
                 )
                 cell.clicked_date.connect(self._on_day_clicked)
-                self._grid.addWidget(cell, row_index, column_index)
+                # 格子整体下移一行：第 0 行留给星期表头，保证列对齐
+                self._grid.addWidget(cell, row_index + 1, column_index)
                 self._grid.setColumnStretch(column_index, 1)
                 self._cells[day] = cell
 

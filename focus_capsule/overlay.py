@@ -79,6 +79,7 @@ class OverlayService(QObject):
         self._exclusions = exclusions
         self._guard_enabled = guard_enabled
         self._snooze_until: float = 0.0
+        self._building = False
 
     # -- helpers ---------------------------------------------------------
 
@@ -104,6 +105,15 @@ class OverlayService(QObject):
 
     def set_guard_enabled(self, enabled: bool) -> None:
         self._guard_enabled = bool(enabled)
+
+    @property
+    def _overlay_window(self):
+        """兼容旧代码/测试：返回当前第一个存活覆盖窗（多屏时为主动窗）。"""
+
+        return self._windows[0] if self._windows else None
+
+    def is_overlay_visible(self) -> bool:
+        return any(self._alive(window) for window in self._windows)
 
     def set_exclusions(self, patterns) -> None:
         self._exclusions = patterns
@@ -140,6 +150,9 @@ class OverlayService(QObject):
 
         if any(self._alive(window) for window in self._windows):
             return True
+        if self._building:
+            # 正在建窗时收到 destroyed→closed 级联，绝不能重入再建一层
+            return False
         if self.is_snoozing():
             return False
         reason = self.guard_available()
@@ -204,31 +217,35 @@ class OverlayService(QObject):
         """每台显示器各开一个覆盖窗（Stretchly allScreens 行为）。"""
 
         created: list[OverlayWindow] = []
-        for screen in QApplication.screens():
-            window = OverlayWindow(
-                title_text=title_text,
-                subtitle_text=subtitle_text,
-                return_seconds=return_seconds,
-                lock_until_switch=lock_until_switch,
-                allowed_apps=allowed_apps,
-                allowed_app_paths=allowed_app_paths,
-                blocked_apps=blocked_apps,
-                strict=strict,
-                snooze_used=snooze_used,
-                snooze_quota=snooze_quota,
-                geometry=screen.geometry(),
-            )
-            window.destroyed.connect(lambda _=None, w=window: self._clear_overlay(w))
-            window.snooze_requested.connect(self._on_snooze_requested)
-            if on_snooze:
-                window.snooze_requested.connect(on_snooze)
-            window.snooze_requested.connect(lambda m: self.snoozed.emit(m))
-            window.show()
-            window.raise_()
-            if not created:
-                # 只在主窗抢焦点，其余屏仅覆盖，避免多屏焦点抖动
-                window.activateWindow()
-            created.append(window)
+        self._building = True
+        try:
+            for screen in QApplication.screens():
+                window = OverlayWindow(
+                    title_text=title_text,
+                    subtitle_text=subtitle_text,
+                    return_seconds=return_seconds,
+                    lock_until_switch=lock_until_switch,
+                    allowed_apps=allowed_apps,
+                    allowed_app_paths=allowed_app_paths,
+                    blocked_apps=blocked_apps,
+                    strict=strict,
+                    snooze_used=snooze_used,
+                    snooze_quota=snooze_quota,
+                    geometry=screen.geometry(),
+                )
+                window.destroyed.connect(lambda _=None, w=window: self._clear_overlay(w))
+                window.snooze_requested.connect(self._on_snooze_requested)
+                if on_snooze:
+                    window.snooze_requested.connect(on_snooze)
+                window.snooze_requested.connect(lambda m: self.snoozed.emit(m))
+                window.show()
+                window.raise_()
+                if not created:
+                    # 只在主窗抢焦点，其余屏仅覆盖，避免多屏焦点抖动
+                    window.activateWindow()
+                created.append(window)
+        finally:
+            self._building = False
         self._windows = created
         return created
 
@@ -456,9 +473,20 @@ class OverlayWindow(QWidget):
         )
 
     def _focus_default(self):
-        back = self.findChild(QPushButton, "overlayPrimaryButton")
-        if back is not None:
-            back.setFocus(Qt.FocusPolicy.OtherFocusReason)
+        """把键盘焦点交给「返回专注」，让 Enter/Esc 立即可用。
+
+        offscreen 平台（CI 与截图自检）里对半透明无边框 Tool 窗的子控件调用
+        setFocus 会直接段错误，因此只在真实桌面平台上执行。
+        """
+
+        app = QApplication.instance()
+        if app is not None and app.platformName() == "offscreen":
+            return
+        target = self._snooze_btn if self._snooze_btn is not None else None
+        if target is None:
+            target = self.findChild(QPushButton, "overlayPrimaryButton")
+        if target is not None:
+            target.setFocus(Qt.FocusPolicy.OtherFocusReason)
 
     # -- behaviour --------------------------------------------------------
 

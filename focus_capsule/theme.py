@@ -92,6 +92,8 @@ LIGHT: Dict[str, Any] = {
     "CHART_TERTIARY":       "#7A9968",
     "CHART_GRID":           "#E3DED1",
     "CHART_FILL":           "#D4BE8C",
+    # 面积图淡色填充（审美红线：淡色块而非饱和实色），仅供新代码使用
+    "CHART_FILL_SOFT":      "rgba(160, 132, 88, 0.10)",
     "CHART_TEXT":           "#9A9285",
     "CHART_CROSSHAIR":      "#1E1C18",
 
@@ -185,6 +187,8 @@ DARK: Dict[str, Any] = {
     "CHART_TERTIARY":       "#A8C28E",
     "CHART_GRID":           "#403B31",
     "CHART_FILL":           "#594F3D",
+    # 面积图淡色填充（暗色主题一档）
+    "CHART_FILL_SOFT":      "rgba(212, 160, 106, 0.10)",
     "CHART_TEXT":           "#8C8578",
     "CHART_CROSSHAIR":      "#F4F1EA",
 
@@ -244,7 +248,7 @@ def notify_listeners():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  PRECISION AGENT OS — DESIGN TOKENS
+#  间距 / 圆角 / 字号等布局令牌
 # ═══════════════════════════════════════════════════════════════════
 
 # ── 8px spacing grid ─────────────────────────────────────────
@@ -326,9 +330,11 @@ DUR_INSPECTOR  = 300
 DUR_FOCUS_MODE = 600
 
 # ── Fonts ─────────────────────────────────────────────────────
-FONT_FAMILY_CN    = '"MiSans", "HarmonyOS Sans SC", "Microsoft YaHei UI", sans-serif'
-FONT_FAMILY_NUM   = '"Geist", "SF Mono", "Cascadia Mono", "Consolas", monospace'
-FONT_FAMILY_UI    = '"Inter", "Geist", "MiSans", "Microsoft YaHei UI", sans-serif'
+# 字体链必须以本机确实存在的字体开头：Qt 的 QSS font-family 会选中列表中
+# 第一个能解析到的族，若首选 "Inter"/"MiSans" 未安装但被部分命中，中文会退化成豆腐块。
+FONT_FAMILY_CN    = '"Microsoft YaHei UI", "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
+FONT_FAMILY_NUM   = '"Consolas", "Menlo", "Cascadia Mono", "Microsoft YaHei UI", monospace'
+FONT_FAMILY_UI    = '"Microsoft YaHei UI", "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
 
 
 def hex_alpha(hex_colour: str, alpha: float) -> str:
@@ -393,48 +399,8 @@ DEFAULT_CATEGORIES = [
     "通讯", "阅读", "影音娱乐", "游戏", "系统工具", "其他",
 ]
 
-# ── Agent execution step states ─────────────────────────────
-STEP_COMPLETED  = "completed"
-STEP_ACTIVE     = "active"
-STEP_PENDING    = "pending"
-STEP_BLOCKED    = "blocked"
-STEP_CONFIRM    = "confirm"
-STEP_DEVIADED   = "deviated"
-
-STEP_ICONS = {
-    STEP_COMPLETED:  "✓",
-    STEP_ACTIVE:     "●",
-    STEP_PENDING:    "○",
-    STEP_BLOCKED:     "⊘",
-    STEP_CONFIRM:     "!",
-    STEP_DEVIADED:    "×",
-}
-
-STEP_LABELS = {
-    STEP_COMPLETED:  "已完成",
-    STEP_ACTIVE:     "执行中",
-    STEP_PENDING:    "待执行",
-    STEP_BLOCKED:    "已阻塞",
-    STEP_CONFIRM:    "待确认",
-    STEP_DEVIADED:   "已偏离",
-}
-
-# ── Agent workflow stages ────────────────────────────────────
-AGENT_STAGES = ["goal", "plan", "execute", "verify", "review"]
-AGENT_STAGE_LABELS = {
-    "goal":    "目标",
-    "plan":    "计划",
-    "execute": "执行",
-    "verify":  "验证",
-    "review":  "复盘",
-}
-AGENT_STAGE_ICONS = {
-    "goal":    "◆",
-    "plan":    "◇",
-    "execute": "●",
-    "verify":  "◐",
-    "review":  "○",
-}
+# 注：原「Agent 执行工作区」遗留常量（STEP_*、AGENT_STAGES、AGENT_STAGE_LABELS、
+# AGENT_STAGE_ICONS）在本仓库无任何引用，已随视觉修正删除。
 
 # ═══════════════════════════════════════════════════════════════════
 #  __getattr__ — resolve old-style token names from active theme

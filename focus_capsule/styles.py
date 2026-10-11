@@ -1,6 +1,6 @@
 """Focus Capsule QSS stylesheet.
 
-Midnight navigation, cool paper canvas and violet-blue focus accents.
+Warm ivory canvas, white surfaces and a restrained gold accent.
 All colours are sourced from theme.py.
 """
 
@@ -14,8 +14,9 @@ def _build_stylesheet() -> str:
     return f"""
 
 /* ═════════════════════════════════════════════════════════════
-   PRECISION AGENT OS — QSS Design System
+   Focus Capsule — QSS Design System
    Warm ivory · graphite · restrained gold accent
+   审美红线：淡色块(5–10% 透明度)+细色条，不用饱和实色填充
    ═════════════════════════════════════════════════════════════ */
 
 /* ── Base canvas ───────────────────────────────────────────── */
@@ -316,22 +317,23 @@ QPushButton:disabled, QToolButton:disabled {{
     border-color: {t["BORDER_SUBTLE"]};
 }}
 
-/* ── Primary button ─────────────────────────────────────── */
+/* ── Primary button — 淡色块 + 细色条，不用饱和实色 ───────── */
 QPushButton#primaryButton {{
     min-height: 44px;
-    color: #FFFFFF;
-    background-color: {t["ACCENT"]};
-    border: 1px solid {t["ACCENT"]};
+    color: {t["ACCENT"]};
+    background-color: {T.hex_alpha(t["ACCENT"], 0.10)};
+    border: 1px solid {T.hex_alpha(t["ACCENT"], 0.32)};
     border-radius: {T.RADIUS_SM}px;
     font-size: 14px;
     font-weight: {T.WEIGHT_SECTION};
 }}
 QPushButton#primaryButton:hover {{
-    background-color: {t["ACCENT_HOVER"]};
-    border-color: {t["ACCENT_HOVER"]};
+    background-color: {T.hex_alpha(t["ACCENT"], 0.16)};
+    border-color: {T.hex_alpha(t["ACCENT"], 0.45)};
 }}
 QPushButton#primaryButton:pressed {{
-    background-color: {t["ACCENT_HOVER"]};
+    background-color: {T.hex_alpha(t["ACCENT"], 0.22)};
+    border-color: {T.hex_alpha(t["ACCENT"], 0.52)};
 }}
 QPushButton#primaryButton:disabled {{
     color: {t["TEXT_DISABLED"]};
@@ -339,7 +341,7 @@ QPushButton#primaryButton:disabled {{
     border-color: {t["BORDER_SUBTLE"]};
 }}
 
-/* ── Ghost / danger ─────────────────────────────────────── */
+/* ── Ghost / danger — 危险按钮同样用淡色块方案 ─────────────── */
 QPushButton#ghostButton {{
     color: {t["TEXT_SECONDARY"]};
     background-color: transparent;
@@ -351,12 +353,12 @@ QPushButton#ghostButton:hover {{
 }}
 QPushButton#dangerButton {{
     color: {t["DANGER"]};
-    background-color: transparent;
-    border: 1px solid {t["DANGER_BG"]};
+    background-color: {T.hex_alpha(t["DANGER"], 0.08)};
+    border: 1px solid {T.hex_alpha(t["DANGER"], 0.32)};
 }}
 QPushButton#dangerButton:hover {{
-    background-color: {t["DANGER_BG"]};
-    border-color: {t["DANGER"]};
+    background-color: {T.hex_alpha(t["DANGER"], 0.16)};
+    border-color: {T.hex_alpha(t["DANGER"], 0.45)};
 }}
 
 /* ── Chips / presets ─────────────────────────────────────── */
@@ -565,32 +567,6 @@ QLabel#breakBadge {{
     padding: 3px 10px;
     font-size: 11px;
     font-weight: {T.WEIGHT_SECTION};
-}}
-
-/* ── Agent step flow ─────────────────────────────────────── */
-QFrame#stepRow {{
-    background: transparent;
-    border: none;
-    padding: 2px 0;
-}}
-QLabel#stepIcon {{
-    font-size: 14px;
-    font-weight: {T.WEIGHT_SECTION};
-    min-width: 18px;
-}}
-QLabel#stepText {{
-    color: {t["TEXT_TERTIARY"]};
-    font-size: 14px;
-    font-weight: {T.WEIGHT_BODY};
-}}
-QLabel#stepTextActive {{
-    color: {t["TEXT_PRIMARY"]};
-    font-size: 14px;
-    font-weight: {T.WEIGHT_SECTION};
-}}
-QLabel#stepTextDone {{
-    color: {t["TEXT_DISABLED"]};
-    font-size: 14px;
 }}
 
 /* ── Toggle switch ───────────────────────────────────────── */

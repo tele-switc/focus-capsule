@@ -9,6 +9,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -157,6 +158,9 @@ class ExitGateDialog(QDialog):
         )
 
     def _focus_input(self):
+        app = QApplication.instance()
+        if app is not None and app.platformName() == "offscreen":
+            return
         if self._gate.needs_phrase:
             self._phrase_input.setFocus()
         elif self._gate.needs_passcode:

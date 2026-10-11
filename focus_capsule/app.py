@@ -124,13 +124,16 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
 
-    if sys.platform == "darwin":
-        family, point_size = "PingFang SC", 13
-    elif sys.platform == "win32":
-        family, point_size = "Microsoft YaHei UI", 10
-    else:
-        family, point_size = "Noto Sans CJK SC", 11
-    font = QFont(family, point_size)
+    # 显式设置应用级字体族链：QApplication 默认字体上 "MiSans"/"HarmonyOS Sans SC"
+    # 等族名并不生效，中文会退化成豆腐块，因此以本机确实存在的字体开头。
+    font = QFont()
+    font.setFamilies([
+        "Microsoft YaHei UI",
+        "Segoe UI",
+        "PingFang SC",
+        "Noto Sans CJK SC",
+    ])
+    font.setPointSize(13 if sys.platform == "darwin" else (10 if sys.platform == "win32" else 11))
     font.setStyleHint(QFont.StyleHint.SansSerif)
     app.setFont(font)
     app.setStyleSheet(STYLESHEET)

@@ -87,7 +87,11 @@ class DailyGoalPage(QWidget):
         body_layout.setSpacing(16)
         body_layout.addWidget(self._build_task_card(), 2)
         body_layout.addWidget(self._build_progress_card(), 1)
+        # 任务/进展这一行吃掉窗口的多余高度，内容随窗口高度自适应分布，
+        # 避免页面底部出现大片空白
+        body_index = main_layout.count()
         main_layout.addLayout(body_layout)
+        main_layout.setStretch(body_index, 1)
 
         self.targets_card = self._build_targets_card()
         main_layout.addWidget(self.targets_card)
@@ -95,7 +99,6 @@ class DailyGoalPage(QWidget):
         self.report_card = self._build_report_card()
         self.report_card.hide()
         main_layout.addWidget(self.report_card)
-        main_layout.addStretch()
 
     def _build_goal_card(self) -> QFrame:
         card = QFrame()
@@ -197,8 +200,8 @@ class DailyGoalPage(QWidget):
 
         self.task_layout = QVBoxLayout()
         self.task_layout.setSpacing(8)
-        layout.addLayout(self.task_layout)
-        layout.addStretch()
+        # 任务列表占满卡片剩余高度：空态面板会随之伸展，有任务时保持顶部排布
+        layout.addLayout(self.task_layout, 1)
         return card
 
     def _build_progress_card(self) -> QFrame:
@@ -380,7 +383,12 @@ class DailyGoalPage(QWidget):
             empty_note = QLabel("在上方输入一件今天想完成的事，它会出现在这里。")
             empty_note.setObjectName("bodyMuted")
             empty_note.setWordWrap(True)
+            empty_note.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            )
             empty_layout.addWidget(empty_note)
+            # 面板被卡片撑高时文字保持顶部排布，不被拉伸分离
+            empty_layout.addStretch()
             self.task_layout.addWidget(empty)
             return
 
@@ -393,6 +401,9 @@ class DailyGoalPage(QWidget):
             item = layout.takeAt(0)
             widget = item.widget()
             if widget:
+                # 与日历页同理：先 hide 再 deleteLater，避免旧行在事件循环
+                # 处理删除前残留显示
+                widget.hide()
                 widget.deleteLater()
 
     def _create_task_row(self, task: TaskItem) -> QFrame:

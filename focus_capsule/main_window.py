@@ -735,7 +735,7 @@ class MainWindow(QMainWindow):
                 return
             rule = self._schedule_manager.active_rule
             first_app = rule.whitelisted_apps[0] if rule and rule.whitelisted_apps else process_name
-            if not self._overlay_service._alive(self._overlay_service._overlay_window):
+            if not self._overlay_service.is_overlay_visible():
                 self._overlay_service.show_overlay(
                     first_app, return_seconds=5,
                     allowed_apps=rule.whitelisted_apps if rule else None,

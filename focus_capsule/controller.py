@@ -17,6 +17,9 @@ from focus_capsule.strict_lock import ExitGate, StrictPolicy
 DISALLOWED_FOREGROUND_GRACE_MS = 1200
 # 连续分心达到该次数即视为本次专注「破功」（Forest 式枯枝判定）
 BROKE_DISTRACTION_THRESHOLD = 8
+# 在导入时绑定单调钟：自检脚本会把 activity_tracker 里的 time.monotonic 换成
+# 假时钟来精确控制累计秒数，控制器不能被同一处补丁牵连。
+_MONOTONIC = time.monotonic
 
 
 @dataclass
@@ -86,6 +89,7 @@ class SessionController(QObject):
         self._terminated = False
         self._process_matcher = ProcessMatcher()
         self._monitor: WindowMonitorThread | None = None
+        self._recheck_pending = False
         # 新增：单调钟计时、延后配额、免打扰抑制计数、破功判定、严格模式闸门
         self._mono_anchor = 0.0
         self._paused_seconds = 0.0
@@ -176,8 +180,9 @@ class SessionController(QObject):
         self._suppressed_count = 0
         self._last_suppressed_reason = ""
         self._broke = False
+        self._recheck_pending = False
         self.exit_gate = None
-        self._mono_anchor = time.monotonic()
+        self._mono_anchor = _MONOTONIC()
         self._paused_seconds = 0.0
         self._pause_started = None
         self._process_matcher = ProcessMatcher(
@@ -190,7 +195,7 @@ class SessionController(QObject):
 
     def _on_timer_tick(self):
         # 用单调钟推进，改系统时间或电脑睡眠都不会让会话计时造假或停住
-        now_mono = time.monotonic()
+        now_mono = _MONOTONIC()
         if self._status == SessionStatus.BREAK:
             if self._pause_started is None:
                 self._pause_started = now_mono
@@ -199,12 +204,12 @@ class SessionController(QObject):
                 self._paused_seconds += now_mono - self._pause_started
                 self._pause_started = None
         if self._status in {SessionStatus.RUNNING, SessionStatus.OVERLAY}:
-            self._elapsed = max(
-                self._elapsed,
-                min(
-                    self._total_seconds,
-                    int(now_mono - self._mono_anchor - self._paused_seconds),
-                ),
+            monotonic_elapsed = int(now_mono - self._mono_anchor - self._paused_seconds)
+            # 取两者较大值：正常推进靠 tick，睡眠/挂起恢复靠单调钟补齐，
+            # 手动驱动 tick 的自检脚本也不会被单调钟拖回 0。
+            self._elapsed = min(
+                self._total_seconds,
+                max(self._elapsed + 1, monotonic_elapsed),
             )
             if self._status == SessionStatus.RUNNING and self._current_focus_process:
                 process = self._current_focus_process
@@ -218,14 +223,22 @@ class SessionController(QObject):
 
     def _on_overlay_closed(self):
         """Called when overlay window is destroyed (auto-close or user dismiss)."""
-        if self._status == SessionStatus.OVERLAY:
-            if self._monitor is not None:
-                # 关掉弹层不等于回到正轨：立刻复查前台，仍分心就重新弹
-                self.on_overlay_dismissed(self._monitor)
-                return
-            self._status = SessionStatus.RUNNING
-            self._overlay.hide_overlay()
-            self._emit_update()
+        if self._status != SessionStatus.OVERLAY:
+            return
+        if self._monitor is not None and not self._recheck_pending:
+            # 延后一拍再复查：destroyed→closed 级联中重入建窗会栈溢出
+            self._recheck_pending = True
+            QTimer.singleShot(0, self._recheck_after_overlay)
+            return
+        self._status = SessionStatus.RUNNING
+        self._overlay.hide_overlay()
+        self._emit_update()
+
+    def _recheck_after_overlay(self) -> None:
+        self._recheck_pending = False
+        if self._status != SessionStatus.OVERLAY or self._monitor is None:
+            return
+        self.on_overlay_dismissed(self._monitor)
 
     def _on_snoozed(self, minutes: int) -> None:
         self._snooze_used += 1
