@@ -22,6 +22,7 @@ assets/FocusCapsule.iconset/
 *.pfx
 *.cer
 *.keychain-db
+/发布与签名/
 
 # Legacy/local build artifacts
 /Focus Capsule.exe
@@ -41,3 +42,13 @@ android_build/
 packaging/pyinstaller_log.txt
 packaging/pyinstaller_log2.txt
 *.pyc
+
+# 本地构建产物与临时目录（不入库）
+/packages/
+/_dmg-extract/
+/work/
+/data/
+/code_review_report.md
+/HANDOFF.md
+/STATE.md
+/docs/e2e-*.md

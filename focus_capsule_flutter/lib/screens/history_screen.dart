@@ -56,6 +56,34 @@ class _HistoryScreenState extends State<HistoryScreen> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: SectionHeader(title: '专注历史'),
             ),
+            // Summary bar
+            if (_records.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgCard,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.borderSubtle),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _summaryStat('总次数', '${_records.length}'),
+                      _summaryStat('总时长', formatDuration(
+                        _records.fold(0, (sum, r) => sum + r.actualFocusSeconds),
+                      )),
+                      _summaryStat('平均专注', formatDuration(
+                        _records.fold(0, (sum, r) => sum + r.actualFocusSeconds) ~/ _records.length,
+                      )),
+                      _summaryStat('完成率', '${(_records.where((r) => r.outcome == 'completed').length / _records.length * 100).toStringAsFixed(0)}%'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             Expanded(
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
@@ -153,6 +181,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return Column(
       children: [
         Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 2),
+        Text(label, style: TextStyle(color: AppTheme.textLabel, fontSize: 11)),
+      ],
+    );
+  }
+
+  Widget _summaryStat(String label, String value) {
+    return Column(
+      children: [
+        Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
         Text(label, style: TextStyle(color: AppTheme.textLabel, fontSize: 11)),
       ],

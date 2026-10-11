@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-
+import 'package:flutter/widgets.dart';
+import '../main.dart' show hideAndroidOverlay, showAndroidOverlay;
 import '../models.dart';
-import 'history_service.dart';
+import '../services/history_service.dart';
 
 class SessionUpdate {
   final SessionStatus status;
@@ -169,9 +170,13 @@ class SessionController extends ChangeNotifier {
     if (_terminated || _status != SessionStatus.break_ || _breakRemaining > 0) return;
     _status = SessionStatus.running;
     _breakRemaining = 0;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      hideAndroidOverlay();
+    });
     _emitUpdate();
   }
 
+  /// Called by platform channel when foreground app changes.
   void onForegroundChange(String processName, String windowTitle) {
     if (_terminated || _status != SessionStatus.running) return;
     if (_config == null) return;
@@ -179,11 +184,28 @@ class SessionController extends ChangeNotifier {
     final process = processName.trim().toLowerCase();
     if (process.isEmpty) return;
 
+    // Skip system processes
+    final systemProcesses = {
+      'com.android.systemui',
+      'system_server',
+      'com.android.launcher',
+      'com.google.android.launcher',
+      'android',
+    };
+    if (systemProcesses.contains(process)) return;
+
     final allowed = _config!.whitelist.any(
       (pa) => pa.trim().toLowerCase() == process,
     );
-    if (allowed) return;
+    if (allowed) {
+      // User switched to a whitelisted app — return to running state
+      if (_status == SessionStatus.overlay) {
+        _status = SessionStatus.running;
+      }
+      return;
+    }
 
+    // Distraction detected
     _distractions++;
     _distractionApps[process] = (_distractionApps[process] ?? 0) + 1;
     _distractionEvents.add(
@@ -194,11 +216,42 @@ class SessionController extends ChangeNotifier {
       ),
     );
 
+    // Enter overlay mode for Standard or Deep mode
     final mode = _config!.mode;
     if ((mode == 'Deep' || mode == 'Standard') && _config!.whitelist.isNotEmpty) {
       _status = SessionStatus.overlay;
+      // Show Android system overlay
+      final appName = _config!.whitelist.firstOrNull ?? '';
+      final seconds = mode == 'Deep' ? 5 : 3;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        showAndroidOverlay(appName, seconds, _config!.whitelist);
+      });
     }
     _emitUpdate();
+  }
+
+  void onOverlayDismissed(String currentProcess) {
+    if (_terminated || !isActive) return;
+    
+    final process = currentProcess.trim().toLowerCase();
+    if (_config != null && process.isNotEmpty) {
+      final allowed = _config!.whitelist.any(
+        (pa) => pa.trim().toLowerCase() == process,
+      );
+      if (!allowed && _status == SessionStatus.overlay) {
+        // Stay in overlay mode
+        return;
+      }
+    }
+    
+    // User returned to allowed app or dismissed — back to running
+    if (_status == SessionStatus.overlay) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        hideAndroidOverlay();
+      });
+      _status = SessionStatus.running;
+      _emitUpdate();
+    }
   }
 
   void completeSession() {
@@ -206,6 +259,9 @@ class SessionController extends ChangeNotifier {
     _status = SessionStatus.completed;
     _timer?.cancel();
     _breakTimer?.cancel();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      hideAndroidOverlay();
+    });
     _saveAndNotify();
   }
 
@@ -215,6 +271,9 @@ class SessionController extends ChangeNotifier {
     _status = SessionStatus.terminated;
     _timer?.cancel();
     _breakTimer?.cancel();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      hideAndroidOverlay();
+    });
     _saveAndNotify();
   }
 

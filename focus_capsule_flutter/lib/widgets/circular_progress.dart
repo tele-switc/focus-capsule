@@ -73,6 +73,8 @@ class _CircularProgressRingState extends State<CircularProgressRing>
         return AppTheme.accentSuccess;
       case RingState.stopped:
         return AppTheme.textDanger;
+      case RingState.danger:
+        return AppTheme.bgDanger;
     }
   }
 
@@ -88,6 +90,8 @@ class _CircularProgressRingState extends State<CircularProgressRing>
         return '完成!';
       case RingState.stopped:
         return '已停止';
+      case RingState.danger:
+        return '检测到干扰';
     }
   }
 
@@ -212,4 +216,4 @@ class _RingPainter extends CustomPainter {
   }
 }
 
-enum RingState { ready, running, break_, completed, stopped }
+enum RingState { ready, running, break_, completed, stopped, danger }

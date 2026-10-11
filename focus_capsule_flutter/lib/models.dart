@@ -42,6 +42,7 @@ class FocusConfig {
   final int escBreakMinutes;
   final String? goal;
   final List<String> customApps;
+  final Map<String, String> allowedAppPaths;
 
   FocusConfig({
     this.whitelist = const [],
@@ -51,6 +52,7 @@ class FocusConfig {
     this.escBreakMinutes = 3,
     this.goal,
     this.customApps = const [],
+    this.allowedAppPaths = const {},
   });
 
   FocusConfig copyWith({
@@ -61,6 +63,7 @@ class FocusConfig {
     int? escBreakMinutes,
     String? goal,
     List<String>? customApps,
+    Map<String, String>? allowedAppPaths,
   }) {
     return FocusConfig(
       whitelist: whitelist ?? this.whitelist,
@@ -70,6 +73,7 @@ class FocusConfig {
       escBreakMinutes: escBreakMinutes ?? this.escBreakMinutes,
       goal: goal ?? this.goal,
       customApps: customApps ?? this.customApps,
+      allowedAppPaths: allowedAppPaths ?? this.allowedAppPaths,
     );
   }
 }
@@ -83,6 +87,9 @@ class ScheduleRule {
   final String mode;
   final bool enabled;
   final String label;
+  final int maxEsc;
+  final int escBreakMinutes;
+  final Map<String, String> allowedAppPaths;
 
   ScheduleRule({
     this.startHour = 0,
@@ -93,6 +100,9 @@ class ScheduleRule {
     this.mode = 'Deep',
     this.enabled = true,
     this.label = '',
+    this.maxEsc = 2,
+    this.escBreakMinutes = 3,
+    this.allowedAppPaths = const {},
   });
 
   Map<String, dynamic> toJson() => {
@@ -104,6 +114,9 @@ class ScheduleRule {
         'mode': mode,
         'enabled': enabled,
         'label': label,
+        'max_esc': maxEsc,
+        'esc_break_minutes': escBreakMinutes,
+        'allowed_app_paths': allowedAppPaths,
       };
 
   factory ScheduleRule.fromJson(Map<String, dynamic> json) {
@@ -124,6 +137,11 @@ class ScheduleRule {
       mode: json['mode'] ?? 'Deep',
       enabled: enabled,
       label: json['label'] ?? '',
+      maxEsc: json['max_esc'] ?? 2,
+      escBreakMinutes: json['esc_break_minutes'] ?? 3,
+      allowedAppPaths: Map<String, String>.from(
+        (json['allowed_app_paths'] as Map?) ?? const {},
+      ),
     );
   }
 
@@ -136,6 +154,9 @@ class ScheduleRule {
     String? mode,
     bool? enabled,
     String? label,
+    int? maxEsc,
+    int? escBreakMinutes,
+    Map<String, String>? allowedAppPaths,
   }) {
     return ScheduleRule(
       startHour: startHour ?? this.startHour,
@@ -146,6 +167,9 @@ class ScheduleRule {
       mode: mode ?? this.mode,
       enabled: enabled ?? this.enabled,
       label: label ?? this.label,
+      maxEsc: maxEsc ?? this.maxEsc,
+      escBreakMinutes: escBreakMinutes ?? this.escBreakMinutes,
+      allowedAppPaths: allowedAppPaths ?? this.allowedAppPaths,
     );
   }
 }
