@@ -36,15 +36,20 @@ Windows / macOS / Android · 数据全在本地 · GPLv3
 
 ## 下载
 
-| 平台 | 产物 | 状态 |
-| --- | --- | --- |
-| Windows 10/11 x64 | `Focus-Capsule-4.0.0-Windows-x64-Setup.exe` | ✅ CI 每次打 tag 自动构建 |
-| macOS (Apple Silicon) | `Focus-Capsule-4.0.0-macOS-arm64.dmg` | ✅ CI 构建，未做签名公证 |
-| Android 8.0+ (arm64) | `Focus-Capsule-4.0.0-Android-arm64-v8a.apk` | ✅ CI 构建，未签名 |
+v4.0.0（由 GitHub Actions 在打 tag 时自动构建，见 [Releases](../../releases)）：
 
-去 [Releases](../../releases) 页面下载，每个产物旁边有 `SHA256SUMS.txt`。
+| 平台 | 产物 | 大小 | SHA-256 |
+| --- | --- | --- | --- |
+| Windows 10/11 x64 | [Focus-Capsule-4.0.0-Windows-x64-Setup.exe](../../releases/download/v4.0.0/Focus-Capsule-4.0.0-Windows-x64-Setup.exe) | 29.68 MB | `c2d4763a9c9a875ab78e68b77fcb5a635bd9437301af2918355c9ad7ef7393ff` |
+| macOS (Apple Silicon) | [Focus-Capsule-4.0.0-macOS-arm64.dmg](../../releases/download/v4.0.0/Focus-Capsule-4.0.0-macOS-arm64.dmg) | 32.1 MB | `6300fdf0a9dd480fe452025a21be005a0a1c0fd1c6528613cd924a4937b9fe33` |
+| Android 8.0+ (arm64) | [Focus-Capsule-4.0.0-Android-arm64-v8a.apk](../../releases/download/v4.0.0/Focus-Capsule-4.0.0-Android-arm64-v8a.apk) | 17.3 MB | `e972aac1b62bfe4efe7c51c13e7f5ea63201578ebfaa88c6f53d325e1876d5ef` |
 
-macOS 首次打开会被 Gatekeeper 拦下（未做 notarize）：右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/"Focus Capsule".app`。
+完整校验和：[SHA256SUMS.txt](../../releases/download/v4.0.0/SHA256SUMS.txt)
+
+三端构建状态：✅ 全部由 CI 自动产出（`.github/workflows/release.yml`）。
+
+macOS 首次打开会被 Gatekeeper 拦下（未做签名与公证）：右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/"Focus Capsule".app`。Android APK 未签名，安装需允许「未知来源」。
+
 
 ## 平台差异（说实话部分）
 
