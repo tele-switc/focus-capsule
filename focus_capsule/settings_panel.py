@@ -12,11 +12,14 @@ from PyQt6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLayout,
     QLayoutItem,
@@ -38,6 +41,15 @@ from focus_capsule.icon_utils import (
     windows_shortcut_details,
 )
 from focus_capsule.models import FocusConfig
+from focus_capsule.strict_lock import hash_passcode
+
+# 严格模式等级（下拉顺序即强度顺序）
+STRICT_LEVEL_CHOICES: tuple[tuple[str, str], ...] = (
+    ("off", "不锁定"),
+    ("cooldown", "等完冷静期"),
+    ("phrase", "输入随机字符"),
+    ("passcode", "输入口令"),
+)
 
 
 def _common_apps_for_platform() -> list[tuple[str, str]]:
@@ -997,6 +1009,8 @@ class SettingsPanel(QWidget):
     start_clicked = pyqtSignal(object)  # Kept for MainWindow compatibility.
     config_changed = pyqtSignal(object)  # Emits FocusConfig after each user change.
     manage_categories_requested = pyqtSignal()
+    # (免打扰开关, 额外排除清单)
+    guard_settings_changed = pyqtSignal(bool, list)
 
     SETTINGS_ORGANIZATION = "FocusCapsule"
     SETTINGS_APPLICATION = "FocusCapsule"
@@ -1015,6 +1029,8 @@ class SettingsPanel(QWidget):
         self._installed_apps: list[dict] = []
         self._installed_by_process: dict[str, dict] = {}
         self._pinned_processes: set[str] = set()
+        self._strict_passcode_hash: str = ""
+        self._guard_exclusions: list[str] = []
         self._app_display_names = {process: name for name, process in COMMON_APPS}
         self._selected_apps_labels: list[QPushButton] = []
         self._load_installed_catalog()
@@ -1056,6 +1072,7 @@ class SettingsPanel(QWidget):
         layout.addWidget(self._build_apps_section())
         layout.addWidget(self._build_intensity_section())
         layout.addWidget(self._build_escape_section())
+        layout.addWidget(self._build_strict_section())
         layout.addStretch()
 
         scroll.setWidget(content)
@@ -1416,6 +1433,99 @@ class SettingsPanel(QWidget):
         layout.addWidget(controls_host)
         return section
 
+    def _build_strict_section(self) -> QFrame:
+        section, layout = self._new_section(
+            "严格模式",
+            "提高退出的成本。冷静期内不能立刻结束，期间专注照常计时；"
+            "随时可以点「继续专注」放弃退出，放弃不会留下破功记录。",
+        )
+
+        controls_host = QWidget()
+        flow = FlowLayout(controls_host, horizontal_spacing=9, vertical_spacing=9)
+
+        level_control, level_layout = self._compact_control("结束专注需要")
+        self._strict_level_combo = QComboBox()
+        self._strict_level_combo.setObjectName("compactSelect")
+        for value, label in STRICT_LEVEL_CHOICES:
+            self._strict_level_combo.addItem(label, value)
+        self._strict_level_combo.setMinimumWidth(150)
+        self._strict_level_combo.setAccessibleName("严格模式等级")
+        self._strict_level_combo.currentIndexChanged.connect(self._on_strict_level_changed)
+        level_layout.addWidget(self._strict_level_combo)
+        flow.addWidget(level_control)
+
+        cooldown_control, cooldown_layout = self._compact_control("冷静期")
+        self._strict_cooldown_spin = QSpinBox()
+        self._strict_cooldown_spin.setObjectName("compactSpin")
+        self._strict_cooldown_spin.setRange(1, 240)
+        self._strict_cooldown_spin.setValue(5)
+        self._strict_cooldown_spin.setSuffix(" 分钟")
+        self._strict_cooldown_spin.setMinimumWidth(104)
+        self._strict_cooldown_spin.setAccessibleName("冷静期分钟数")
+        self._strict_cooldown_spin.valueChanged.connect(self._on_strict_setting_changed)
+        cooldown_layout.addWidget(self._strict_cooldown_spin)
+        flow.addWidget(cooldown_control)
+
+        self._passcode_btn = QPushButton("设置口令")
+        self._passcode_btn.setObjectName("ghostButton")
+        self._passcode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._passcode_btn.clicked.connect(self._on_set_passcode)
+        flow.addWidget(self._passcode_btn)
+        layout.addWidget(controls_host)
+
+        self._guard_check = QCheckBox("全屏演示、开会、系统专注模式下不弹拦截层")
+        self._guard_check.setObjectName("guardCheck")
+        self._guard_check.setChecked(True)
+        self._guard_check.toggled.connect(self._on_guard_toggled)
+        layout.addWidget(self._guard_check)
+        self._sync_strict_visibility()
+        return section
+
+    def _strict_level(self) -> str:
+        return str(self._strict_level_combo.currentData() or "off")
+
+    def _sync_strict_visibility(self) -> None:
+        level = self._strict_level()
+        strict = level != "off"
+        self._strict_cooldown_spin.setVisible(strict)
+        self._passcode_btn.setVisible(level == "passcode")
+
+    def _on_strict_level_changed(self, _index: int) -> None:
+        if self._updating:
+            return
+        self._sync_strict_visibility()
+        self._emit_config_changed()
+
+    def _on_strict_setting_changed(self, _value: int) -> None:
+        if self._updating:
+            return
+        self._emit_config_changed()
+
+    def _on_set_passcode(self) -> None:
+        text, ok = QInputDialog.getText(
+            self,
+            "设置专注口令",
+            "4–16 位口令（本机只保存加盐哈希，忘了只能删除配置重来）：",
+            QLineEdit.EchoMode.Password,
+        )
+        cleaned = str(text or "").strip()
+        if not ok:
+            return
+        if len(cleaned) < 4:
+            QMessageBox.warning(self, "口令太短", "口令至少 4 位。")
+            return
+        self._strict_passcode_hash = hash_passcode(cleaned)
+        QMessageBox.information(
+            self, "已设置", "口令已保存。下次结束专注时需要输入它。"
+        )
+        self._emit_config_changed()
+
+    def _on_guard_toggled(self, checked: bool) -> None:
+        if self._updating:
+            return
+        self.save_config()
+        self.guard_settings_changed.emit(bool(checked), list(self._guard_exclusions))
+
     def _compact_control(self, label: str) -> tuple[QFrame, QHBoxLayout]:
         control = QFrame()
         control.setObjectName("compactControl")
@@ -1618,6 +1728,9 @@ class SettingsPanel(QWidget):
             max_esc=self._max_esc_spin.value(),
             esc_break_minutes=self._esc_break_spin.value(),
             allowed_app_paths=allowed_app_paths,
+            strict_level=self._strict_level(),
+            strict_cooldown_minutes=self._strict_cooldown_spin.value(),
+            strict_passcode_hash=self._strict_passcode_hash,
         )
         config.goal = self._goal_edit.text().strip()
         config.custom_apps = list(self._custom_apps)
@@ -1743,6 +1856,20 @@ class SettingsPanel(QWidget):
         finally:
             self._updating = previous_updating
 
+        was_updating = self._updating
+        self._updating = True
+        try:
+            index = self._strict_level_combo.findData(getattr(config, "strict_level", "off"))
+            self._strict_level_combo.setCurrentIndex(max(0, index))
+            self._strict_cooldown_spin.setValue(
+                int(getattr(config, "strict_cooldown_minutes", 5) or 5)
+            )
+            if getattr(config, "strict_passcode_hash", ""):
+                self._strict_passcode_hash = config.strict_passcode_hash
+            self._sync_strict_visibility()
+        finally:
+            self._updating = was_updating
+
         if emit:
             self._emit_config_changed()
 
@@ -1761,6 +1888,11 @@ class SettingsPanel(QWidget):
             "allowed_app_paths",
             json.dumps(config.allowed_app_paths, ensure_ascii=False),
         )
+        settings.setValue("strict_level", config.strict_level)
+        settings.setValue("strict_cooldown_minutes", config.strict_cooldown_minutes)
+        settings.setValue("strict_passcode_hash", self._strict_passcode_hash)
+        settings.setValue("guard_enabled", self._guard_check.isChecked())
+        settings.setValue("guard_exclusions", json.dumps(self._guard_exclusions, ensure_ascii=False))
         settings.endGroup()
         settings.sync()
 
@@ -1774,10 +1906,25 @@ class SettingsPanel(QWidget):
             max_esc=self._as_int(settings.value("max_esc", 2), 2),
             esc_break_minutes=self._as_int(settings.value("esc_break_minutes", 3), 3),
             allowed_app_paths=self._as_path_map(settings.value("allowed_app_paths", "")),
+            strict_level=str(settings.value("strict_level", "off") or "off"),
+            strict_cooldown_minutes=self._as_int(
+                settings.value("strict_cooldown_minutes", 5), 5
+            ),
         )
         config.goal = str(settings.value("goal", "") or "")
         config.custom_apps = self._as_string_list(settings.value("custom_apps", []))
+        self._strict_passcode_hash = str(
+            settings.value("strict_passcode_hash", "") or ""
+        )
+        try:
+            self._guard_exclusions = json.loads(
+                str(settings.value("guard_exclusions", "[]") or "[]")
+            )
+        except Exception:
+            self._guard_exclusions = []
+        guard_enabled = str(settings.value("guard_enabled", True))
         settings.endGroup()
+        self._guard_check.setChecked(str(guard_enabled).casefold() not in {"false", "0", "no"})
         self._apply_config(config, emit=False)
         return config
 

@@ -12,6 +12,7 @@ from PyQt6.QtCore import QSettings, Qt, QTime, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -462,6 +463,44 @@ class SchedulePanel(QWidget):
         )
         settings_row.addWidget(dur_spin)
 
+        # 严格模式（该条排程专用）
+        strict_label = QLabel("退出：")
+        strict_label.setObjectName("scheduleHint")
+        strict_label.setFixedWidth(36)
+        settings_row.addWidget(strict_label)
+
+        strict_combo = QComboBox()
+        strict_combo.setObjectName("compactSelect")
+        strict_combo.addItem("不锁定", "off")
+        strict_combo.addItem("冷静期", "cooldown")
+        strict_combo.addItem("随机字符", "phrase")
+        strict_combo.addItem("口令", "passcode")
+        strict_combo.setMinimumWidth(96)
+        current_strict = str(getattr(rule, "strict_level", "off") or "off")
+        combo_index = strict_combo.findData(current_strict)
+        strict_combo.setCurrentIndex(max(0, combo_index))
+        strict_combo.currentIndexChanged.connect(
+            lambda _v, _idx=index, _combo=strict_combo: self._on_strict_changed(_idx, _combo)
+        )
+        settings_row.addWidget(strict_combo)
+
+        cooldown_spin = QSpinBox()
+        cooldown_spin.setObjectName("compactSpin")
+        cooldown_spin.setRange(1, 240)
+        cooldown_spin.setValue(int(getattr(rule, "strict_cooldown_minutes", 5) or 5))
+        cooldown_spin.setSuffix(" 分")
+        cooldown_spin.setMinimumWidth(72)
+        cooldown_spin.setKeyboardTracking(False)
+        cooldown_spin.setVisible(current_strict == "cooldown")
+        cooldown_spin.setToolTip("冷静期内不能结束锁定，期间专注照常计时")
+        cooldown_spin.valueChanged.connect(
+            lambda _v, _idx=index, _spin=cooldown_spin: self._on_cooldown_changed(_idx, _spin)
+        )
+        settings_row.addWidget(cooldown_spin)
+        if not hasattr(self, "_cooldown_spins"):
+            self._cooldown_spins = {}
+        self._cooldown_spins[index] = cooldown_spin
+
         settings_row.addStretch()
         layout.addLayout(settings_row)
 
@@ -583,6 +622,33 @@ class SchedulePanel(QWidget):
             self._manager.update_rule(index, rule)
             self.save_rules()
             self.rules_changed.emit()
+
+    def _on_strict_changed(self, index: int, combo: QComboBox) -> None:
+        if self._loading:
+            return
+        rules = self._manager.rules
+        if not 0 <= index < len(rules):
+            return
+        rule = rules[index]
+        rule.strict_level = str(combo.currentData() or "off")
+        spin = getattr(self, "_cooldown_spins", {}).get(index)
+        if spin is not None:
+            spin.setVisible(rule.strict_level == "cooldown")
+        self._manager.update_rule(index, rule)
+        self.save_rules()
+        self.rules_changed.emit()
+
+    def _on_cooldown_changed(self, index: int, spin: QSpinBox) -> None:
+        if self._loading:
+            return
+        rules = self._manager.rules
+        if not 0 <= index < len(rules):
+            return
+        rule = rules[index]
+        rule.strict_cooldown_minutes = spin.value()
+        self._manager.update_rule(index, rule)
+        self.save_rules()
+        self.rules_changed.emit()
 
     def _edit_rule_apps(self, index: int) -> None:
         rules = self._manager.rules

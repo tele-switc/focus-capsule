@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import time
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -11,8 +12,11 @@ from focus_capsule.models import (
 )
 from focus_capsule.monitor import WindowMonitorThread
 from focus_capsule.process_matching import ProcessMatcher
+from focus_capsule.strict_lock import ExitGate, StrictPolicy
 
 DISALLOWED_FOREGROUND_GRACE_MS = 1200
+# 连续分心达到该次数即视为本次专注「破功」（Forest 式枯枝判定）
+BROKE_DISTRACTION_THRESHOLD = 8
 
 
 @dataclass
@@ -26,6 +30,9 @@ class SessionUpdate:
     mode: str
     current_app: str
     break_remaining: int
+    snooze_remaining: int = 0
+    suppressed_reason: str = ""
+    broke: bool = False
 
     def to_dict(self):
         return {
@@ -37,7 +44,10 @@ class SessionUpdate:
             'distraction_count': self.distraction_count,
             'mode': self.mode,
             'current_app': self.current_app,
-            'break_remaining': self.break_remaining
+            'break_remaining': self.break_remaining,
+            'snooze_remaining': self.snooze_remaining,
+            'suppressed_reason': self.suppressed_reason,
+            'broke': self.broke,
         }
 
 
@@ -75,9 +85,30 @@ class SessionController(QObject):
         self._pending_distraction: tuple[str, str, str, int] | None = None
         self._terminated = False
         self._process_matcher = ProcessMatcher()
+        self._monitor: WindowMonitorThread | None = None
+        # 新增：单调钟计时、延后配额、免打扰抑制计数、破功判定、严格模式闸门
+        self._mono_anchor = 0.0
+        self._paused_seconds = 0.0
+        self._pause_started: float | None = None
+        self._snooze_used = 0
+        self._suppressed_count = 0
+        self._last_suppressed_reason = ""
+        self._broke = False
+        self.exit_gate: ExitGate | None = None
         closed_signal = getattr(self._overlay, "closed", None)
         if closed_signal is not None and hasattr(closed_signal, "connect"):
             closed_signal.connect(self._on_overlay_closed)
+        snooze_signal = getattr(self._overlay, "snoozed", None)
+        if snooze_signal is not None and hasattr(snooze_signal, "connect"):
+            snooze_signal.connect(self._on_snoozed)
+        suppress_signal = getattr(self._overlay, "suppressed", None)
+        if suppress_signal is not None and hasattr(suppress_signal, "connect"):
+            suppress_signal.connect(self._on_suppressed)
+
+    def attach_monitor(self, monitor: WindowMonitorThread) -> None:
+        """让控制器在覆盖层被关闭后能复查前台应用（否则关掉就没人再管了）。"""
+
+        self._monitor = monitor
 
     @property
     def status(self):
@@ -141,6 +172,14 @@ class SessionController(QObject):
         self._break_remaining = 0
         self._started_at = datetime.now().astimezone()
         self._terminated = False
+        self._snooze_used = 0
+        self._suppressed_count = 0
+        self._last_suppressed_reason = ""
+        self._broke = False
+        self.exit_gate = None
+        self._mono_anchor = time.monotonic()
+        self._paused_seconds = 0.0
+        self._pause_started = None
         self._process_matcher = ProcessMatcher(
             config.whitelist,
             getattr(config, "allowed_app_paths", {}),
@@ -150,8 +189,23 @@ class SessionController(QObject):
         self._emit_update()
 
     def _on_timer_tick(self):
+        # 用单调钟推进，改系统时间或电脑睡眠都不会让会话计时造假或停住
+        now_mono = time.monotonic()
+        if self._status == SessionStatus.BREAK:
+            if self._pause_started is None:
+                self._pause_started = now_mono
+        else:
+            if self._pause_started is not None:
+                self._paused_seconds += now_mono - self._pause_started
+                self._pause_started = None
         if self._status in {SessionStatus.RUNNING, SessionStatus.OVERLAY}:
-            self._elapsed += 1
+            self._elapsed = max(
+                self._elapsed,
+                min(
+                    self._total_seconds,
+                    int(now_mono - self._mono_anchor - self._paused_seconds),
+                ),
+            )
             if self._status == SessionStatus.RUNNING and self._current_focus_process:
                 process = self._current_focus_process
                 self._app_focus_seconds[process] = (
@@ -165,9 +219,21 @@ class SessionController(QObject):
     def _on_overlay_closed(self):
         """Called when overlay window is destroyed (auto-close or user dismiss)."""
         if self._status == SessionStatus.OVERLAY:
+            if self._monitor is not None:
+                # 关掉弹层不等于回到正轨：立刻复查前台，仍分心就重新弹
+                self.on_overlay_dismissed(self._monitor)
+                return
             self._status = SessionStatus.RUNNING
             self._overlay.hide_overlay()
             self._emit_update()
+
+    def _on_snoozed(self, minutes: int) -> None:
+        self._snooze_used += 1
+        self._emit_update()
+
+    def _on_suppressed(self, reason: str) -> None:
+        self._suppressed_count += 1
+        self._last_suppressed_reason = reason
 
     def _emit_update(self):
         update = SessionUpdate(
@@ -183,20 +249,42 @@ class SessionController(QObject):
                 if self._config and self._config.whitelist
                 else ""
             ),
-            break_remaining=self._break_remaining
+            break_remaining=self._break_remaining,
+            snooze_remaining=(
+                self._overlay.snooze_remaining()
+                if hasattr(self._overlay, "snooze_remaining")
+                else 0
+            ),
+            suppressed_reason=self._last_suppressed_reason,
+            broke=self._broke,
         )
         self.update_requested.emit(update)
 
     def handle_escape(self):
-        if (
-            self._terminated
-            or self._status not in {SessionStatus.RUNNING, SessionStatus.OVERLAY}
-            or self._esc_remaining <= 0
-        ):
+        if self._terminated or self._status not in {
+            SessionStatus.RUNNING,
+            SessionStatus.OVERLAY,
+        }:
+            return
+        if self._esc_remaining <= 0:
+            # 配额用尽后再按「临时离开」＝主动破功：本次专注记为枯枝，且不再给休息
+            self._broke = True
+            self._esc_used += 1
+            self._distraction_events.append(
+                DistractionEntry(
+                    process_name="__escape_exhausted__",
+                    window_title=None,
+                    occurred_at=datetime.now().astimezone().isoformat(),
+                    note="逃逸配额用尽后仍选择离开",
+                )
+            )
+            self._emit_update()
             return
 
         self._esc_remaining -= 1
         self._esc_used += 1
+        if self._esc_remaining == 0 and self._config and self._config.max_esc:
+            self._broke = True
         self._status = SessionStatus.BREAK
         self._cancel_pending_distraction()
         self._break_remaining = (self._config.esc_break_minutes if self._config else 3) * 60
@@ -350,6 +438,8 @@ class SessionController(QObject):
             return
 
         self._distractions += 1
+        if self._distractions >= BROKE_DISTRACTION_THRESHOLD:
+            self._broke = True
         self._distraction_apps[process] = self._distraction_apps.get(process, 0) + 1
         self._distraction_events.append(
             DistractionEntry(
@@ -362,23 +452,58 @@ class SessionController(QObject):
         mode = self._config.mode
         if mode in {"Deep", "Standard"} and self._config.whitelist:
             self._status = SessionStatus.OVERLAY
+            strict = getattr(self._config, "strict_level", "off") != "off"
+            kwargs = dict(
+                return_seconds=5 if mode == "Deep" else 3,
+                allowed_apps=list(self._config.whitelist),
+                allowed_app_paths=dict(getattr(self._config, "allowed_app_paths", {})),
+                strict=strict,
+                snooze_used=self._snooze_used,
+                snooze_quota=getattr(self._config, "snooze_quota", 2),
+            )
             try:
-                self._overlay.show_overlay(
+                shown = self._overlay.show_overlay(
                     self._config.whitelist[0],
-                    return_seconds=5 if mode == "Deep" else 3,
-                    allowed_apps=list(self._config.whitelist),
-                    allowed_app_paths=dict(getattr(self._config, "allowed_app_paths", {})),
+                    **kwargs,
                 )
             except TypeError as exc:
                 # Preserve compatibility with small overlay adapters that
                 # implement the pre-v3 two-argument interface.
                 if "allowed_apps" not in str(exc):
                     raise
-                self._overlay.show_overlay(
+                shown = self._overlay.show_overlay(
                     self._config.whitelist[0],
                     return_seconds=5 if mode == "Deep" else 3,
                 )
+            if shown is False:
+                # 被免打扰环境抑制（全屏演示/系统专注模式）：记一笔但不打断
+                if self._distraction_events:
+                    self._distraction_events[-1].note = (
+                        self._last_suppressed_reason or "免打扰环境，已跳过拦截"
+                    )
         self._emit_update()
+
+    def request_early_exit(self) -> ExitGate:
+        """用户点「提前结束」时调用；严格模式下返回需要满足的闸门。"""
+
+        policy = (
+            self._config.strict_policy()
+            if self._config is not None
+            else StrictPolicy()
+        )
+        gate = ExitGate(policy)
+        gate.begin()
+        if policy.level == "phrase":
+            gate.arm_phrase()
+        self.exit_gate = gate
+        return gate
+
+    def can_exit(self) -> bool:
+        """非严格模式恒为 True；严格模式要求冷静期走完且校验通过。"""
+
+        if self.exit_gate is None:
+            return True
+        return bool(self.exit_gate.released)
 
     def complete_session(self):
         if self._terminated or self._status not in {
@@ -394,10 +519,14 @@ class SessionController(QObject):
         self.session_completed.emit(record)
         self.tray_update.emit(False)
 
-    def terminate(self):
+    def terminate(self, force: bool = False):
         if not self.is_active:
             return
+        if not force and not self.can_exit():
+            # 严格模式：冷静期未结束或校验未通过，不允许结束
+            return
         self._terminated = True
+        self._broke = True  # 提前结束＝破功，与 Forest 的枯树一致
         self._status = SessionStatus.TERMINATED
         self._cancel_pending_distraction()
         self._timer.stop()
@@ -458,4 +587,11 @@ class SessionController(QObject):
                 getattr(self._config, "schedule_end", "") if self._config else ""
             ),
             app_focus_seconds=dict(self._app_focus_seconds),
+            esc_allowed=(self._config.max_esc if self._config else 0),
+            snooze_used=self._snooze_used,
+            suppressed_count=self._suppressed_count,
+            broke=bool(self._broke),
+            strict_level=(
+                getattr(self._config, "strict_level", "off") if self._config else "off"
+            ),
         )

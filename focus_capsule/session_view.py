@@ -143,6 +143,9 @@ class SessionViewWindow(QWidget):
         controls.addWidget(self._break_button, 1)
 
         end_button = QPushButton("提前结束")
+        if str(getattr(self._config, "strict_level", "off") or "off") != "off":
+            end_button.setText("结束（需解锁）")
+            end_button.setToolTip("严格模式：需要先通过冷静期或输入校验")
         end_button.setObjectName("dangerButton")
         end_button.setAccessibleName("提前结束本次专注")
         end_button.clicked.connect(self.end_requested)
@@ -156,7 +159,26 @@ class SessionViewWindow(QWidget):
         allowed_label.setObjectName("tinyMuted")
         allowed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         allowed_label.setWordWrap(True)
+        # 截断展示必须给出完整清单入口
+        allowed_label.setToolTip(
+            "、".join(self._friendly_app_name(app) for app in self._config.whitelist)
+        )
         root.addWidget(allowed_label)
+
+        # 延后额度与严格模式提示（与覆盖层出口保持一致）
+        quota = int(getattr(self._config, "snooze_quota", 2) or 0)
+        strict_level = str(getattr(self._config, "strict_level", "off") or "off")
+        notes = []
+        if strict_level != "off":
+            notes.append("严格模式：提前结束需要解锁")
+        if quota:
+            notes.append(f"拦截层可延后 {quota} 次")
+        if notes:
+            note_label = QLabel(" · ".join(notes))
+            note_label.setObjectName("tinyMuted")
+            note_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            note_label.setWordWrap(True)
+            root.addWidget(note_label)
 
     @staticmethod
     def _stat_card(layout: QHBoxLayout, value: str, caption: str) -> QLabel:
@@ -195,7 +217,21 @@ class SessionViewWindow(QWidget):
         self._elapsed_label.setText(f"已专注 {elapsed_minutes:02d}:{elapsed_seconds:02d}")
         self._distraction_value.setText(str(update.distraction_count))
         self._escape_value.setText(str(update.esc_remaining))
-        self._mode_value.setText(MODE_LABELS.get(update.mode, update.mode))
+        mode_text = MODE_LABELS.get(update.mode, update.mode)
+        if getattr(update, "broke", False):
+            mode_text += " · 已破功"
+        self._mode_value.setText(mode_text)
+        if getattr(update, "suppressed_reason", ""):
+            self._elapsed_label.setText(
+                f"已专注 {elapsed_minutes:02d}:{elapsed_seconds:02d} · "
+                f"{update.suppressed_reason}，本轮只记录不打断"
+            )
+        elif getattr(update, "snooze_remaining", 0) > 0:
+            minutes_left, _ = divmod(update.snooze_remaining, 60)
+            self._elapsed_label.setText(
+                f"已专注 {elapsed_minutes:02d}:{elapsed_seconds:02d} · "
+                f"拦截延后中（约 {minutes_left + 1} 分钟内不再弹）"
+            )
 
         if update.status == SessionStatus.BREAK:
             self._status_label.setText("临时休息")

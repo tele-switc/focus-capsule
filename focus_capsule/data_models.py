@@ -47,6 +47,12 @@ class AppConfig:
     ai_api_key: str = ""
     ai_api_url: str = "https://api.deepseek.com/v1/chat/completions"
     ai_model: str = "deepseek-chat"
+    # 免打扰与严格模式（全局默认值，可被单条排程规则覆盖）
+    guard_enabled: bool = True
+    focus_exclusions: list[str] = field(default_factory=list)
+    strict_level: str = "off"
+    strict_cooldown_minutes: int = 5
+    strict_passcode_hash: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -67,6 +73,11 @@ class AppConfig:
             "ai_api_key": self.ai_api_key,
             "ai_api_url": self.ai_api_url,
             "ai_model": self.ai_model,
+            "guard_enabled": bool(self.guard_enabled),
+            "focus_exclusions": [str(x) for x in self.focus_exclusions],
+            "strict_level": str(self.strict_level),
+            "strict_cooldown_minutes": int(self.strict_cooldown_minutes),
+            "strict_passcode_hash": str(self.strict_passcode_hash),
         }
 
     @classmethod
@@ -92,6 +103,19 @@ class AppConfig:
             ai_api_key=str(data.get("ai_api_key", "")),
             ai_api_url=str(data.get("ai_api_url", "https://api.deepseek.com/v1/chat/completions")),
             ai_model=str(data.get("ai_model", "deepseek-chat")),
+            guard_enabled=bool(data.get("guard_enabled", True)),
+            focus_exclusions=[
+                str(item)
+                for item in (data.get("focus_exclusions") or [])
+                if str(item).strip()
+            ],
+            strict_level=(
+                str(data.get("strict_level", "off"))
+                if str(data.get("strict_level", "off")) in {"off", "cooldown", "phrase", "passcode"}
+                else "off"
+            ),
+            strict_cooldown_minutes=int(data.get("strict_cooldown_minutes", 5) or 5),
+            strict_passcode_hash=str(data.get("strict_passcode_hash", "") or ""),
         )
 
 

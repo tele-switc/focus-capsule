@@ -1,10 +1,9 @@
 name: Build Flutter APK
 
+# 仅用于手动验证；正式 APK 由 release.yml 发布。
+
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read

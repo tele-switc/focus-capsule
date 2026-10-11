@@ -1,7 +1,32 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
+from focus_capsule.strict_lock import StrictPolicy
 
+VALID_STRICT_LEVELS = {"off", "cooldown", "phrase", "passcode"}
+
+
+def _normalise_strict_fields(container) -> None:
+    """把严格模式字段收敛到合法范围（就地修改 dataclass 实例）。"""
+
+    level = str(getattr(container, "strict_level", "off") or "off")
+    if level not in VALID_STRICT_LEVELS:
+        level = "off"
+    container.strict_level = level
+    try:
+        minutes = int(getattr(container, "strict_cooldown_minutes", 5) or 5)
+    except (TypeError, ValueError):
+        minutes = 5
+    container.strict_cooldown_minutes = max(1, min(240, minutes))
+    try:
+        quota = int(getattr(container, "snooze_quota", 2) or 0)
+    except (TypeError, ValueError):
+        quota = 2
+    container.snooze_quota = max(0, min(5, quota))
+    container.strict_passcode_hash = str(getattr(container, "strict_passcode_hash", "") or "")
+
+
+@dataclass
 class IntensityMode(Enum):
     LIGHT = "Light"
     STANDARD = "Standard"
@@ -10,11 +35,11 @@ class IntensityMode(Enum):
 
 @dataclass
 class ScheduleRule:
-    """A time-based app-locking rule following the China timezone (UTC+8).
+    """A time-based app-locking rule following the local timezone.
 
     The rule activates every day at *start_hour:start_minute* and releases at
     *end_hour:end_minute*. While active, only *whitelisted_apps* are permitted
-    and the overlay protection behaves as if a Deep-mode session is running.
+    and the overlay protection follows *mode* (Light / Standard / Deep).
     """
     start_hour: int = 0
     start_minute: int = 0
@@ -27,6 +52,17 @@ class ScheduleRule:
     max_esc: int = 2
     esc_break_minutes: int = 3
     allowed_app_paths: dict[str, str] = field(default_factory=dict)
+    strict_level: str = "off"
+    strict_cooldown_minutes: int = 5
+    strict_passcode_hash: str = ""
+    snooze_quota: int = 2
+
+    def strict_policy(self) -> StrictPolicy:
+        return StrictPolicy(
+            level=self.strict_level,
+            cooldown_minutes=self.strict_cooldown_minutes,
+            passcode_hash=self.strict_passcode_hash,
+        )
 
     def __post_init__(self) -> None:
         for name, minimum, maximum in (
@@ -69,6 +105,7 @@ class ScheduleRule:
             self.esc_break_minutes = max(1, min(15, int(self.esc_break_minutes or 3)))
         except (TypeError, ValueError):
             self.esc_break_minutes = 3
+        _normalise_strict_fields(self)
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +120,10 @@ class ScheduleRule:
             "max_esc": self.max_esc,
             "esc_break_minutes": self.esc_break_minutes,
             "allowed_app_paths": dict(self.allowed_app_paths),
+            "strict_level": self.strict_level,
+            "strict_cooldown_minutes": self.strict_cooldown_minutes,
+            "strict_passcode_hash": self.strict_passcode_hash,
+            "snooze_quota": self.snooze_quota,
         }
 
     @classmethod
@@ -112,6 +153,10 @@ class ScheduleRule:
             max_esc=data.get("max_esc", 2),
             esc_break_minutes=data.get("esc_break_minutes", 3),
             allowed_app_paths=data.get("allowed_app_paths", {}),
+            strict_level=str(data.get("strict_level", "off") or "off"),
+            strict_cooldown_minutes=data.get("strict_cooldown_minutes", 5),
+            strict_passcode_hash=str(data.get("strict_passcode_hash", "") or ""),
+            snooze_quota=data.get("snooze_quota", 2),
         )
 
 
@@ -139,6 +184,22 @@ class FocusConfig:
     schedule_label: str = ""
     schedule_start: str = ""
     schedule_end: str = ""
+    strict_level: str = "off"
+    strict_cooldown_minutes: int = 5
+    strict_passcode_hash: str = ""
+    phrase_length: int = 8
+    snooze_quota: int = 2
+
+    def __post_init__(self) -> None:
+        _normalise_strict_fields(self)
+
+    def strict_policy(self) -> StrictPolicy:
+        return StrictPolicy(
+            level=self.strict_level,
+            cooldown_minutes=self.strict_cooldown_minutes,
+            phrase_length=self.phrase_length,
+            passcode_hash=self.strict_passcode_hash,
+        )
 
 
 @dataclass
@@ -146,6 +207,7 @@ class DistractionEntry:
     process_name: str
     window_title: str | None
     occurred_at: str
+    note: str | None = None
 
 
 @dataclass
@@ -166,3 +228,8 @@ class SessionRecord:
     schedule_start: str = ""
     schedule_end: str = ""
     app_focus_seconds: dict[str, int] = field(default_factory=dict)
+    esc_allowed: int = 0
+    snooze_used: int = 0
+    suppressed_count: int = 0
+    broke: bool = False
+    strict_level: str = "off"

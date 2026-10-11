@@ -1,10 +1,9 @@
 name: Build desktop installers
 
+# 仅用于 PR / 手动验证构建可用性；正式产物由 release.yml 在打 tag 时发布。
+
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
   pull_request:
     paths:
       - "focus_capsule/**"
@@ -21,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.14"
+  PYTHON_VERSION: "3.12"
 
 jobs:
   windows:

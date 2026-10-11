@@ -6,7 +6,7 @@ calm work canvas.  Navigation always shows labels instead of relying on glyphs.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QCloseEvent
 from PyQt6.QtWidgets import (
     QApplication,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from focus_capsule import focus_guard
 from focus_capsule import theme as T
 from focus_capsule.activity_tracker import ActivityTracker
 from focus_capsule.ai_report_service import AIReportService
@@ -37,6 +38,7 @@ from focus_capsule.daily_progress import DailyProgressService
 from focus_capsule.data_models import china_today
 from focus_capsule.data_store import DataStore
 from focus_capsule.dialogs import ask_confirmation, show_information
+from focus_capsule.exit_gate_dialog import ExitGateDialog
 from focus_capsule.history_db import HistoryService
 from focus_capsule.history_window import CompletionWindow, HistoryWindow
 from focus_capsule.icon_utils import discover_installed_apps
@@ -47,18 +49,19 @@ from focus_capsule.schedule_manager import ScheduleManager, _seconds_until_next_
 from focus_capsule.schedule_panel import SchedulePanel
 from focus_capsule.session_view import SessionViewWindow
 from focus_capsule.settings_panel import SettingsPanel
+from focus_capsule.strict_lock import ClockGuard
 from focus_capsule.trend_page import TrendPage
 from focus_capsule.trend_service import TrendService
 
 NAV_LABELS = ["今日概览", "专注计划", "日程锁定", "专注日历", "数据趋势"]
-NAV_TOOLTIPS = ["查看并安排今天的任务", "专注计划", "日程锁定", "日历", "趋势"]
+NAV_TOOLTIPS = ["查看并安排今天的任务", "配置专注会话", "按时间自动锁定", "每日专注记录", "专注数据分析"]
 
 PAGE_TITLES = {
     0: ("今日概览", "安排任务并查看真实进度"),
-    1: ("专注计划", "配置专注会话"),
-    2: ("日程锁定", "自动化时间规则"),
-    3: ("日历", "每日专注记录"),
-    4: ("趋势", "专注数据分析"),
+    1: ("专注计划", "配置一次专注会话"),
+    2: ("日程锁定", "按时间段自动起停专注"),
+    3: ("专注日历", "每日专注记录与强度"),
+    4: ("数据趋势", "时间线、分类与连续记录"),
 }
 
 
@@ -85,13 +88,23 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._activity_tracker = ActivityTracker(self._data_store, self)
-        self._overlay_service = OverlayService(self)
+        self._exclusions = focus_guard.compile_exclusions(
+            list(getattr(self._app_config, "focus_exclusions", []) or []) or None
+        )
+        self._overlay_service = OverlayService(
+            self,
+            exclusions=self._exclusions,
+            guard_enabled=bool(getattr(self._app_config, "guard_enabled", True)),
+        )
         self._window_monitor = WindowMonitorThread(self)
         self._session_controller = SessionController(
             self._history_service,
             self._overlay_service,
             self,
         )
+        # 覆盖层被关闭后由控制器复查前台，避免「关掉弹层就一路放行」
+        self._session_controller.attach_monitor(self._window_monitor)
+        self._clock_guard = ClockGuard()
         self._settings_panel = SettingsPanel()
         self._schedule_manager = ScheduleManager(self)
         self._schedule_panel = SchedulePanel(self._schedule_manager, self)
@@ -149,11 +162,39 @@ class MainWindow(QMainWindow):
             self._settings_panel.start_clicked.connect(self._start_session)
         if hasattr(self._schedule_panel, "rules_changed"):
             self._schedule_panel.rules_changed.connect(self._on_config_changed)
+        if hasattr(self._settings_panel, "guard_settings_changed"):
+            self._settings_panel.guard_settings_changed.connect(
+                self._on_guard_settings_changed
+            )
 
         self._center_window()
 
         self._window_monitor.start()
         self._load_and_start_schedule()
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(60_000)
+        self._clock_timer.timeout.connect(self._check_clock_integrity)
+        self._clock_timer.start()
+
+    def _check_clock_integrity(self) -> None:
+        """改系统时间绕不过去：检测到倒退/跳变就终止当前锁定并记为破功。"""
+
+        try:
+            tampered, reason = self._clock_guard.check()
+        except Exception:
+            return
+        if not tampered:
+            return
+        if self._session_controller.is_active:
+            self._session_controller.terminate(force=True)
+        self._schedule_manager.suppress_active_rule()
+        if self._tray.isVisible():
+            self._tray.showMessage(
+                "检测到系统时间被调整",
+                f"{reason}，本次锁定已终止并记录为破功。",
+                QSystemTrayIcon.MessageIcon.Warning,
+                6000,
+            )
 
     # ------------------------------------------------------------------
     # UI construction
@@ -293,11 +334,11 @@ class MainWindow(QMainWindow):
         title_box.setSpacing(1)
         title_box.setContentsMargins(0, 0, 0, 0)
 
-        self._page_title_label = QLabel("今日")
+        self._page_title_label = QLabel("今日概览")
         self._page_title_label.setObjectName("pageTitle")
         title_box.addWidget(self._page_title_label)
 
-        self._page_subtitle_label = QLabel("Agent 执行工作区")
+        self._page_subtitle_label = QLabel("安排任务并查看真实进度")
         self._page_subtitle_label.setObjectName("pageSubtitle")
         title_box.addWidget(self._page_subtitle_label)
 
@@ -364,6 +405,22 @@ class MainWindow(QMainWindow):
             from focus_capsule.styles import _build_stylesheet
             app.setStyleSheet(_build_stylesheet())
 
+    def _on_guard_settings_changed(self, enabled: bool, exclusions) -> None:
+        """免打扰开关/清单改动即时生效，不必重启。"""
+
+        patterns = focus_guard.compile_exclusions(list(exclusions or []) or None)
+        self._exclusions = patterns
+        self._overlay_service.set_guard_enabled(bool(enabled))
+        self._overlay_service.set_exclusions(patterns)
+        try:
+            config = self._data_store.load_app_config()
+            config.guard_enabled = bool(enabled)
+            config.focus_exclusions = [str(item) for item in (exclusions or [])]
+            self._app_config = config
+            self._data_store.save_app_config(config)
+        except Exception:
+            pass
+
     def _on_config_changed(self, *_) -> None:
         if self._schedule_manager.is_active and not self._session_controller.is_active:
             rule = self._schedule_manager.active_rule
@@ -384,6 +441,19 @@ class MainWindow(QMainWindow):
 
         if hasattr(self._settings_panel, "save_config"):
             self._settings_panel.save_config()
+
+        # 全局严格模式默认值（会话自身未指定时生效）
+        if (
+            getattr(config, "strict_level", "off") == "off"
+            and str(getattr(self._app_config, "strict_level", "off") or "off") != "off"
+        ):
+            config.strict_level = self._app_config.strict_level
+            config.strict_cooldown_minutes = int(
+                getattr(self._app_config, "strict_cooldown_minutes", 5) or 5
+            )
+            config.strict_passcode_hash = str(
+                getattr(self._app_config, "strict_passcode_hash", "") or ""
+            )
 
         remaining_unlocks = self._daily_progress.remaining_unlocks_today()
         if remaining_unlocks is not None:
@@ -411,16 +481,30 @@ class MainWindow(QMainWindow):
             self.showNormal()
             raise
 
-    def _confirm_end_session(self):
-        if not self._session_controller.is_active:
-            return
-        confirmed = ask_confirmation(
-            self._session_view or self, "提前结束本次专注？",
-            "当前进度会保存到历史记录。",
-            confirm_text="结束并保存", cancel_text="继续专注", destructive=True,
+    def _request_exit(self, scope_label: str) -> bool:
+        """统一的「提前结束」流程；严格模式下要过冷静期/字符/口令。"""
+
+        controller = self._session_controller
+        if not controller.is_active:
+            return False
+        gate = controller.request_early_exit()
+        if gate.policy.is_strict:
+            dialog = ExitGateDialog(gate, self._session_view or self)
+            if not dialog.exec():
+                return False
+            return bool(gate.released)
+        return ask_confirmation(
+            self._session_view or self,
+            f"提前结束{scope_label}？",
+            "当前进度会保存到历史记录，今天会记一次破功。",
+            confirm_text="结束并保存",
+            cancel_text="继续专注",
+            destructive=True,
         )
-        if confirmed:
-            self._session_controller.terminate()
+
+    def _confirm_end_session(self):
+        if self._request_exit("本次专注"):
+            self._session_controller.terminate(force=True)
 
     def _hide_session_to_tray(self):
         if self._session_view:
@@ -581,13 +665,20 @@ class MainWindow(QMainWindow):
         remaining_seconds = max(60, _seconds_until_next_boundary(rule))
         config = FocusConfig(
             duration_minutes=max(1, (remaining_seconds + 59) // 60),
-            mode="Deep",
+            mode=getattr(rule, "mode", "Deep") or "Deep",
             goal="通过日程锁定进行专注",
             whitelist=rule.whitelisted_apps,
             max_esc=getattr(rule, "max_esc", 0),
             esc_break_minutes=getattr(rule, "esc_break_minutes", 3),
             allowed_app_paths=dict(getattr(rule, "allowed_app_paths", {})),
             source="schedule",
+            strict_level=getattr(rule, "strict_level", "off") or "off",
+            strict_cooldown_minutes=getattr(rule, "strict_cooldown_minutes", 5),
+            strict_passcode_hash=(
+                getattr(rule, "strict_passcode_hash", "")
+                or str(getattr(self._app_config, "strict_passcode_hash", "") or "")
+            ),
+            snooze_quota=getattr(rule, "snooze_quota", 2),
             schedule_label=getattr(rule, "label", "") or "日程锁定",
             schedule_start=f"{rule.start_hour:02d}:{rule.start_minute:02d}",
             schedule_end=f"{rule.end_hour:02d}:{rule.end_minute:02d}",
@@ -617,15 +708,8 @@ class MainWindow(QMainWindow):
             raise
 
     def _confirm_schedule_end(self):
-        if not self._session_controller.is_active:
-            return
-        confirmed = ask_confirmation(
-            self._session_view or self, "提前结束日程锁定？",
-            "日程锁定期间专注的进度会保存到历史记录。",
-            confirm_text="结束并保存", cancel_text="继续专注", destructive=True,
-        )
-        if confirmed:
-            self._session_controller.terminate()
+        if self._request_exit("日程锁定"):
+            self._session_controller.terminate(force=True)
             self._schedule_manager.suppress_active_rule()
 
     def _on_schedule_foreground_check(
@@ -752,15 +836,10 @@ class MainWindow(QMainWindow):
         if self._quitting:
             return
         if self._session_controller.is_active:
-            confirmed = ask_confirmation(
-                self._session_view or self, "结束专注并退出？",
-                "当前专注仍在进行。退出前会保存现有进度。",
-                confirm_text="结束并退出", cancel_text="继续专注", destructive=True,
-            )
-            if not confirmed:
+            if not self._request_exit("专注"):
                 return
             self._quitting = True
-            self._session_controller.terminate()
+            self._session_controller.terminate(force=True)
         else:
             self._quitting = True
         T.set_focused(False)
