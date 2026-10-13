@@ -10,6 +10,11 @@ Windows / macOS / Android · 数据全在本地 · GPLv3
 
 多数专注工具只做到两端的一端：**番茄钟**只管计时，不知道你这 25 分钟里到底在写代码还是在刷视频；**时间追踪器**知道你干了什么，但不会在你分心时拦你一下。专注舱做的是中间那件事——它知道你的前台应用，知道你这轮计划允许用哪些应用，走神时弹一层提醒，并把这些都记下来。
 
+> **先说在前面**：我不会写代码，这个工具是我为了把自己从短视频里捞出来，用 AI 一行行搓出来的。
+> 三端能装能用的包都由 CI 自动产出，逻辑核心有 124 项测试钉着（下面有复跑命令，你可以自己验）。
+> 但它仍然是个人项目：界面粗糙、Android 端只能提醒、macOS 没做签名，这些我在
+> 「平台差异（说实话部分）」里逐条写了，没有粉饰。有问题欢迎开 issue，请多指教。
+
 ## 它怎么工作
 
 **1. 前台感知，而不是拉黑清单。** 通过系统前台窗口（Windows 用 `win32gui`，macOS 用 `NSWorkspace`）识别你当前在哪个应用，白名单匹配精确到「进程名 + 可执行文件路径 + 进程血缘」，所以 `pythonw.exe` 启动的 IDE 不会被误判成脚本宿主。
@@ -72,8 +77,13 @@ python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt   # Windows
 .venv/Scripts/python -m focus_capsule            # 启动
 
-.venv/Scripts/python -m pytest tests -q          # 跑测试
+.venv/Scripts/python -m pytest tests -q          # 跑测试：本机 2026-10-12 复跑 124 项全过
 ```
+
+测试覆盖的是那几条会咬人的纯逻辑：白名单匹配（进程名 + 可执行文件路径 + 进程血缘）、
+逃逸配额与破功判定、严格模式三档锁、系统时间回拨检测、排程自动起停、连续达标与日历聚合、
+时间线区间合并。用系统 Python 直接跑会报 11 个 collection error —— 那是缺 PySide6 依赖，
+不是测试坏了，请先 `pip install -r requirements.txt`。
 
 构建安装包：`packaging/build_windows.ps1`（需要 Inno Setup）、`packaging/build_macos.sh`（需要 macOS）。Android 端在 `focus_capsule_flutter/`，`flutter build apk --release`。
 
